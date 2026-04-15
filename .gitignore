@@ -38,6 +38,13 @@ __pycache__/
 venv/
 env/
 
+# Docker volumes (local dev)
+.docker/
+
+# Data
+data/
+*.csv
+
 # Coverage / test output
 .coverage
 .coverage.*
