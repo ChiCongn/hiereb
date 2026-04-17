@@ -1,0 +1,12 @@
+{
+  "title": "House Load Monitor",
+  "uid": "hiereb-main",
+  "panels": [
+    {"type": "timeseries", "title": "Actual vs Predicted", "targets": [{"rawSql": "SELECT time, actual_load, pred_load FROM house_metrics WHERE house_id = $house_id"}]},
+    {"type": "timeseries", "title": "Error Budget e_h", "targets": [{"rawSql": "SELECT time, e_h FROM house_metrics"}]},
+    {"type": "stat", "title": "Transmission Rate", "targets": [{"rawSql": "SELECT AVG(tr) FROM house_metrics"}]},
+    {"type": "stat", "title": "Row Count", "targets": [{"rawSql": "SELECT COUNT(*) FROM house_metrics"}]},
+    {"type": "timeseries", "title": "TR Trend", "targets": [{"rawSql": "SELECT time, tr FROM house_metrics"}]},
+    {"type": "table", "title": "Latest Metrics", "targets": [{"rawSql": "SELECT * FROM house_metrics ORDER BY time DESC LIMIT 10"}]}
+  ]
+}
