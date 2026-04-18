@@ -117,7 +117,7 @@ class HouseAggregator:
     async def run(self) -> None:
         consumer = AIOKafkaConsumer(
             TOPIC_SENSOR_DATA,
-            bootstrap_servers=settings.KAFKA_BOOTSTRAP,
+            bootstrap_servers=settings.KAFKA_BOOTSTRAP_SERVERS,
             group_id=CONSUMER_GROUP,
             auto_offset_reset="latest",
             enable_auto_commit=True,
@@ -130,7 +130,7 @@ class HouseAggregator:
             log.error(
                 "kafka_consumer_connection_failed",
                 error=str(exc),
-                bootstrap=settings.KAFKA_BOOTSTRAP,
+                bootstrap=settings.KAFKA_BOOTSTRAP_SERVERS,
             )
             raise
 
@@ -227,7 +227,7 @@ class HouseAggregator:
 
 async def _main() -> None:
     configure_logging(settings.LOG_LEVEL)
-    log.info("aggregator_starting", kafka=settings.KAFKA_BOOTSTRAP, db=settings.DB_HOST)
+    log.info("aggregator_starting", kafka=settings.KAFKA_BOOTSTRAP_SERVERS, db=settings.DB_HOST)
 
     writer = await TimescaleWriter.create()
     aggregator = HouseAggregator(writer)

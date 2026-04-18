@@ -4,7 +4,7 @@ All values read from environment variables (or .env file).
 
 Usage:
     from config.settings import settings
-    print(settings.KAFKA_BOOTSTRAP)
+    print(settings.KAFKA_BOOTSTRAP_SERVERS)
 """
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ class Settings(BaseSettings):
 
     # ── TimescaleDB ───────────────────────────────────────────────────────────
     DB_HOST: str = Field(default="timescaledb")
-    DB_PORT: int = Field(default=5432)
+    DB_PORT: int = Field(default=5433)
     DB_USER: str = Field(default="hiereb")
     DB_PASSWORD: str = Field(default="hiereb_pass")
     DB_NAME: str = Field(default="hiereb_db")
