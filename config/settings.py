@@ -15,11 +15,11 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
 
     # ── Kafka ─────────────────────────────────────────────────────────────────
-    KAFKA_BOOTSTRAP: str = Field(default="kafka:9092")
+    KAFKA_BOOTSTRAP_SERVERS: str = Field(default="kafka:9092")
 
     # ── Data ──────────────────────────────────────────────────────────────────
     DATA_PATH: str = Field(default="/data")
-    DATA_FILE: str = Field(default="house_01.csv")
+    DATA_FILE: str = Field(default="house-1.csv")
     # NOTE: pydantic-settings reads lists from env as JSON.
     # Example: HOUSE_IDS='[1]' or HOUSE_IDS='[0,1,2]'
     HOUSE_IDS: list[int] = Field(default=[1])
