@@ -1,0 +1,56 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# HierEB – Development Dockerfile  (Dockerfile.dev)
+#
+# Differences from production Dockerfile:
+#   - Includes dev + paper extras (pytest, matplotlib, psycopg2)
+#   - Source mounted as volume (hot reload without rebuild)
+#   - Runs as root for easier file permission during development
+#   - Smaller, single-stage (no need to optimise image size)
+#
+# Usage with docker-compose.override.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.override.yml up simulator
+#
+# Or standalone:
+#   docker build -f Dockerfile.dev -t hiereb:dev .
+#   docker run --rm -it \
+#     -v $(pwd):/app \
+#     -v /hiereb/data:/data:ro \
+#     --env-file .env \
+#     --network hiereb_net \
+#     hiereb:dev bash
+# ─────────────────────────────────────────────────────────────────────────────
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# All system deps in one layer (no separate builder stage needed for dev)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libpq-dev \
+    libpq5 \
+    # Useful for debugging inside the container
+    curl \
+    wget \
+    procps \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install all dependency groups: runtime + dev (pytest) + paper (matplotlib)
+COPY pyproject.toml .
+RUN pip install --no-cache-dir -e ".[dev,paper]"
+
+# Source is NOT copied here — it should be mounted as a volume:
+#   -v $(pwd):/app
+# This enables hot-reload: edit files on host, changes visible immediately.
+# Only copy config/ as a fallback if no volume is mounted.
+COPY config/ config/
+COPY src/ src/
+
+ENV LOG_LEVEL=DEBUG \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# Dev: run as root for easier permission handling
+# Override with --user if needed
+
+CMD ["bash"]
