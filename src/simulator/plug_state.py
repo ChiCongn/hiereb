@@ -83,11 +83,26 @@ class HouseState:
             )
         return self.plugs[plug_uid]
 
-    def update_deltas(self, deltas: Dict[int, float]) -> None:
+    def update_deltas(self, deltas: Dict[int, float], create_missing: bool = False) -> None:
         """Apply new deltas received from hiereb.thresholds topic."""
         for plug_uid, delta in deltas.items():
             if plug_uid in self.plugs:
                 self.plugs[plug_uid].set_delta(delta)
+            elif create_missing:
+                decoded_house_id = plug_uid // 100_000
+                if decoded_house_id != self.house_id:
+                    log.warning(
+                        "delta_house_mismatch",
+                        plug_uid=plug_uid,
+                        decoded_house_id=decoded_house_id,
+                        house_id=self.house_id,
+                    )
+                    continue
+
+                remainder = plug_uid % 100_000
+                household_id = remainder // 1_000
+                plug_id = remainder % 1_000
+                self.get_or_create_plug(plug_uid, household_id, plug_id).set_delta(delta)
             else:
                 log.warning("unknown_plug_for_delta", plug_uid=plug_uid, house_id=self.house_id)
 

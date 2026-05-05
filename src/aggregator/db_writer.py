@@ -38,8 +38,8 @@ class HouseMetricRecord:
 
 _INSERT_SQL = """
     INSERT INTO house_metrics
-        (time, house_id, actual_load, pred_load, e_h, tr, plug_count, transmitted_count)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        (run_id, time, house_id, actual_load, pred_load, e_h, tr, plug_count, transmitted_count)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
     ON CONFLICT DO NOTHING
 """
 
@@ -96,6 +96,7 @@ class TimescaleWriter:
 
         rows = [
             (
+                settings.RUN_ID,
                 datetime.fromtimestamp(r.timestamp_unix, tz=timezone.utc),
                 r.house_id,
                 r.actual_load,

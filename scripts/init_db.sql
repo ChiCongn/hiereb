@@ -9,6 +9,7 @@ CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;
 -- One row per (house, timestep). Written by the Aggregator.
 -- ─────────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS house_metrics (
+    run_id            TEXT        NOT NULL DEFAULT 'default',
     time              TIMESTAMPTZ  NOT NULL,
     house_id          SMALLINT     NOT NULL,
     actual_load       REAL,          -- total house load (W); suppressed plugs use predicted
@@ -19,11 +20,23 @@ CREATE TABLE IF NOT EXISTS house_metrics (
     transmitted_count SMALLINT       -- plugs that actually transmitted
 );
 
+ALTER TABLE IF EXISTS house_metrics
+    ADD COLUMN IF NOT EXISTS run_id TEXT NOT NULL DEFAULT 'default';
+
 SELECT create_hypertable('house_metrics', 'time', if_not_exists => TRUE);
 SELECT set_chunk_time_interval('house_metrics', INTERVAL '1 hour');
 
 CREATE INDEX IF NOT EXISTS idx_house_metrics_house_time
     ON house_metrics (house_id, time DESC);
+
+CREATE INDEX IF NOT EXISTS idx_house_metrics_run_house_time
+    ON house_metrics (run_id, house_id, time DESC);
+
+DROP INDEX IF EXISTS idx_house_metrics_time_house_unique;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_house_metrics_run_time_house_unique
+    ON house_metrics (run_id, time, house_id)
+    WHERE run_id <> 'default';
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Threshold history

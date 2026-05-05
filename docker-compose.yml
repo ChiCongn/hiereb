@@ -47,6 +47,25 @@ services:
       start_period: 30s
     restart: unless-stopped
 
+  kafka-init:
+    image: apache/kafka:3.7.0
+    container_name: hiereb-kafka-init
+    networks:
+      - hiereb_net
+    depends_on:
+      kafka:
+        condition: service_healthy
+    command:
+      - sh
+      - -c
+      - |
+        /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --bootstrap-server kafka:29092 --topic hiereb.sensor_data --partitions 4 --replication-factor 1 &&
+        /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --bootstrap-server kafka:29092 --topic hiereb.predictions --partitions 1 --replication-factor 1 &&
+        /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --bootstrap-server kafka:29092 --topic hiereb.thresholds --partitions 1 --replication-factor 1 &&
+        /opt/kafka/bin/kafka-topics.sh --create --if-not-exists --bootstrap-server kafka:29092 --topic hiereb.variance --partitions 4 --replication-factor 1 &&
+        echo 'HierEB Kafka topics ready'
+    restart: "no"
+
   # ── TimescaleDB ────────────────────────────────────────────────────────────
   timescaledb:
     image: timescale/timescaledb:2.14.2-pg16
@@ -88,6 +107,7 @@ services:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
       - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
     depends_on:
       timescaledb:
         condition: service_healthy
@@ -113,10 +133,12 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       DATA_PATH: /data
     volumes:
-      - /hiereb/data:/data:ro # DEBS CSV mounted read-only
+      - ./data:/data:ro # DEBS CSV mounted read-only
     depends_on:
       kafka:
         condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
       timescaledb:
         condition: service_healthy
     command: ["python", "-m", "src.simulator.main"]
@@ -144,6 +166,8 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
     command: ["python", "-m", "src.aggregator.main"]
     restart: on-failure:3
     deploy:
@@ -165,12 +189,14 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       DATA_PATH: /data
     volumes:
-      - /hiereb/data:/data:ro
+      - ./data:/data:ro
     depends_on:
       timescaledb:
         condition: service_healthy
       kafka:
         condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
     command: ["python", "-m", "src.ml_hiereb.main"]
     restart: on-failure:3
     deploy:

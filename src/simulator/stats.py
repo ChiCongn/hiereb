@@ -37,7 +37,7 @@ class WelfordState:
 @dataclass
 class SimStats:
     """Per-house simulation statistics."""
-    house_id: int
+    house_id: int | None = None
 
     variance_states: Dict[int, WelfordState] = field(default_factory=dict)
     transmitted: int = 0
@@ -66,6 +66,11 @@ class SimStats:
         if self.total_timesteps == 0:
             return 0.0
         return self.transmitted / self.total_timesteps
+
+    @property
+    def overall_tr(self) -> float:
+        """Alias used by simulator progress logs."""
+        return self.transmission_rate()
 
     def summary(self) -> dict:
         return {

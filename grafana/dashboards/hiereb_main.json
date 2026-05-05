@@ -1,0 +1,271 @@
+{
+  "id": null,
+  "uid": "hiereb-main",
+  "title": "HierEB Report Dashboard",
+  "tags": [
+    "hiereb",
+    "report"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "editable": true,
+  "graphTooltip": 1,
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "run_id",
+        "label": "Run ID",
+        "type": "query",
+        "datasource": {
+          "type": "postgres",
+          "uid": "timescaledb"
+        },
+        "query": "SELECT DISTINCT run_id FROM house_metrics WHERE run_id <> 'default' ORDER BY run_id DESC",
+        "refresh": 1,
+        "multi": false,
+        "includeAll": false,
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        }
+      },
+      {
+        "name": "house_id",
+        "label": "House",
+        "type": "query",
+        "datasource": {
+          "type": "postgres",
+          "uid": "timescaledb"
+        },
+        "query": "SELECT DISTINCT house_id FROM house_metrics WHERE run_id = '$run_id' ORDER BY house_id",
+        "refresh": 2,
+        "multi": false,
+        "includeAll": false,
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Actual vs Predicted Load",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT time AS \"time\", actual_load, pred_load FROM house_metrics WHERE run_id = '$run_id' AND house_id = $house_id AND $__timeFilter(time) ORDER BY time"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "House Error e_h",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT time AS \"time\", e_h FROM house_metrics WHERE run_id = '$run_id' AND house_id = $house_id AND $__timeFilter(time) ORDER BY time"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Transmission Rate Trend",
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT time AS \"time\", tr FROM house_metrics WHERE run_id = '$run_id' AND house_id = $house_id AND $__timeFilter(time) ORDER BY time"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Rolling RMSE (1 minute)",
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT time_bucket('1 minute', time) AS \"time\", sqrt(avg(e_h * e_h)) AS rmse_1m FROM house_metrics WHERE run_id = '$run_id' AND house_id = $house_id AND $__timeFilter(time) GROUP BY 1 ORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Average TR",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT avg(tr) AS value FROM house_metrics WHERE run_id = '$run_id' AND house_id = $house_id AND $__timeFilter(time)"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "RMSE",
+      "gridPos": {
+        "x": 6,
+        "y": 16,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT sqrt(avg(e_h * e_h)) AS value FROM house_metrics WHERE run_id = '$run_id' AND house_id = $house_id AND $__timeFilter(time)"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "P90 |e_h|",
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT percentile_cont(0.9) WITHIN GROUP (ORDER BY abs(e_h)) AS value FROM house_metrics WHERE run_id = '$run_id' AND house_id = $house_id AND $__timeFilter(time)"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Violation Rate |e_h| > 50W",
+      "gridPos": {
+        "x": 18,
+        "y": 16,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT avg(CASE WHEN abs(e_h) > 50 THEN 1 ELSE 0 END)::float AS value FROM house_metrics WHERE run_id = '$run_id' AND house_id = $house_id AND $__timeFilter(time)"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "table",
+      "title": "Run Summary (All Houses)",
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "postgres",
+        "uid": "timescaledb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT run_id, house_id, count(*) AS rows, min(time) AS start_time, max(time) AS end_time, round(avg(tr)::numeric, 4) AS avg_tr, round(sqrt(avg(e_h * e_h))::numeric, 4) AS rmse, round(percentile_cont(0.9) WITHIN GROUP (ORDER BY abs(e_h))::numeric, 4) AS p90_abs_eh FROM house_metrics WHERE run_id = '$run_id' AND $__timeFilter(time) GROUP BY run_id, house_id ORDER BY house_id"
+        }
+      ]
+    }
+  ],
+  "annotations": {
+    "list": []
+  }
+}

@@ -15,7 +15,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
 
     # ── Kafka ─────────────────────────────────────────────────────────────────
-    KAFKA_BOOTSTRAP_SERVERS: str = Field(default="kafka:9092")
+    KAFKA_BOOTSTRAP_SERVERS: str = Field(default="kafka:29092")
 
     # ── Data ──────────────────────────────────────────────────────────────────
     DATA_PATH: str = Field(default="/data")
@@ -33,13 +33,15 @@ class Settings(BaseSettings):
     # hiereb   : full HierEB water-filling (Week 2+)
 
     # ── HierEB Algorithm ──────────────────────────────────────────────────────
-    EPSILON_H: float = Field(default=0.05)         # 5% of mean house load
+    EPSILON_H: float = Field(default=0.05)         # <1 = ratio of mean load; >=1 = Watts
     TAU: int = Field(default=300)                  # reallocation interval (seconds of data-time)
     UNIFORM_DELTA: float = Field(default=10.0)     # Watts, for 'uniform' mode
+    RUN_ID: str = Field(default="default")         # experiment/run namespace for DB rows
 
     # ── TimescaleDB ───────────────────────────────────────────────────────────
     DB_HOST: str = Field(default="timescaledb")
-    DB_PORT: int = Field(default=5433)
+    DB_PORT: int = Field(default=5432)
+    DB_PORT_EXTERNAL: int = Field(default=5433)
     DB_USER: str = Field(default="hiereb")
     DB_PASSWORD: str = Field(default="hiereb_pass")
     DB_NAME: str = Field(default="hiereb_db")

@@ -10,7 +10,7 @@
 #   - All Python services use Dockerfile.dev
 #   - Source code mounted as volume → edit on host, no rebuild needed
 #   - LOG_LEVEL=DEBUG
-#   - No memory limits (easier debugging)
+#   - Production memory guardrails still come from docker-compose.yml
 
 services:
 
@@ -19,13 +19,11 @@ services:
       context: .
       dockerfile: Dockerfile.dev
     volumes:
-      - /hiereb/data:/data:ro
+      - ./data:/data:ro
       - ./src:/app/src          # hot-reload: changes visible without rebuild
       - ./config:/app/config
     environment:
       LOG_LEVEL: DEBUG
-    deploy:
-      resources: {}             # remove memory limit for dev
 
   aggregator:
     build:
@@ -36,18 +34,14 @@ services:
       - ./config:/app/config
     environment:
       LOG_LEVEL: DEBUG
-    deploy:
-      resources: {}
 
   ml-hiereb:
     build:
       context: .
       dockerfile: Dockerfile.dev
     volumes:
-      - /hiereb/data:/data:ro
+      - ./data:/data:ro
       - ./src:/app/src
       - ./config:/app/config
     environment:
       LOG_LEVEL: DEBUG
-    deploy:
-      resources: {}

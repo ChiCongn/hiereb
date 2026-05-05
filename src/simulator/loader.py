@@ -35,6 +35,8 @@ _DEBS_DTYPES = {
 class PlugReading:
     """Single plug measurement at one timestamp."""
     plug_uid: int      # globally unique: house*100000 + household*1000 + plug
+    household_id: int
+    plug_id: int
     timestamp: int
     value: float       # Watts (Property=0 only)
 
@@ -53,6 +55,15 @@ class TimestepBatch:
 def make_plug_uid(house_id: int, household_id: int, plug_id: int) -> int:
     """Compute globally unique plug ID."""
     return house_id * 100_000 + household_id * 1_000 + plug_id
+
+
+def decode_plug_uid(plug_uid: int) -> tuple[int, int, int]:
+    """Decode plug_uid back into (house_id, household_id, plug_id)."""
+    house_id = plug_uid // 100_000
+    remainder = plug_uid % 100_000
+    household_id = remainder // 1_000
+    plug_id = remainder % 1_000
+    return house_id, household_id, plug_id
 
 
 def load_debs(
@@ -92,19 +103,17 @@ def load_debs(
             f"Check HOUSE_IDS in .env"
         )
 
-    # Compute globally unique plug_uid
-    df["plug_uid"] = df.apply(
-        lambda row: make_plug_uid(
-            int(row["house_id"]),
-            int(row["household_id"]),
-            int(row["plug_id"])
-        ),
-        axis=1
+    # Compute globally unique plug_uid vectorized; row-wise apply is too slow
+    # on the multi-GB DEBS CSV files.
+    df["plug_uid"] = (
+        df["house_id"].astype("int64") * 100_000
+        + df["household_id"].astype("int64") * 1_000
+        + df["plug_id"].astype("int64")
     )
 
     # Keep only needed columns + sort
     df = df[["timestamp", "value", "plug_uid", "house_id", "household_id", "plug_id"]]
-    df = df.sort_values("timestamp").reset_index(drop=True)
+    df = df.sort_values(["timestamp", "house_id", "household_id", "plug_id"]).reset_index(drop=True)
 
     n_plugs = df["plug_uid"].nunique()
     n_timestamps = df["timestamp"].nunique()
@@ -129,14 +138,16 @@ def iter_timestep_batches(df: pd.DataFrame) -> Generator[TimestepBatch, None, No
     if df.empty:
         return
 
-    for (house_id, ts), group in df.groupby(["house_id", "timestamp"], sort=True):
+    for (ts, house_id), group in df.groupby(["timestamp", "house_id"], sort=True):
         readings = []
-        for _, row in group.iterrows():
+        for row in group.itertuples(index=False):
             readings.append(
                 PlugReading(
-                    plug_uid=int(row["plug_uid"]),
+                    plug_uid=int(row.plug_uid),
+                    household_id=int(row.household_id),
+                    plug_id=int(row.plug_id),
                     timestamp=int(ts),
-                    value=float(row["value"]),
+                    value=float(row.value),
                 )
             )
 

@@ -13,6 +13,7 @@ import pytest
 from src.simulator.loader import (
     PlugReading,
     TimestepBatch,
+    decode_plug_uid,
     iter_timestep_batches,
     load_debs,
     make_plug_uid,
@@ -43,6 +44,11 @@ def test_make_plug_uid_unique():
     assert make_plug_uid(1, 0, 0) != make_plug_uid(1, 0, 1)
     assert make_plug_uid(1, 0, 0) != make_plug_uid(1, 1, 0)
     assert make_plug_uid(1, 0, 0) != make_plug_uid(2, 0, 0)
+
+
+def test_decode_plug_uid_roundtrip():
+    uid = make_plug_uid(12, 3, 45)
+    assert decode_plug_uid(uid) == (12, 3, 45)
 
 
 # ─── load_debs tests ─────────────────────────────────────────────────────────
@@ -126,17 +132,26 @@ def test_iter_batches_multi_house(sample_csv):
     assert {b.house_id for b in ts1002} == {1, 2}
 
 
+def test_iter_batches_multi_house_global_timestamp_order(sample_csv):
+    df = load_debs(sample_csv, house_ids=[1, 2])
+    batches = list(iter_timestep_batches(df))
+    keys = [(b.timestamp, b.house_id) for b in batches]
+    assert keys == sorted(keys)
+
+
 def test_iter_batches_reading_fields(sample_csv):
     df = load_debs(sample_csv, house_ids=[1])
     batch = next(iter_timestep_batches(df))
     reading = batch.readings[0]
     assert isinstance(reading, PlugReading)
     assert isinstance(reading.plug_uid, int)
+    assert isinstance(reading.household_id, int)
+    assert isinstance(reading.plug_id, int)
     assert isinstance(reading.value, float)
 
 
 # real data test
-def test_with_real_house_01_data():
+def test_with_real_house_1_data():
     """Test với file thật của bạn (house-1.csv)."""
     real_path = Path("data/house-1.csv") 
     if real_path.exists():
