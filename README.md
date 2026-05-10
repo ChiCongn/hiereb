@@ -78,6 +78,24 @@ Main panels for report:
 - Stat cards: `Average TR`, `RMSE`, `P90 |e_h|`, `Violation Rate |e_h| > 50W`
 - `Run Summary (All Houses)` table
 
+Detailed Vietnamese demo and inspection guide:
+
+```bash
+less docs/demo_system_guide.md
+```
+
+Inspect the whole stack:
+
+```bash
+bash scripts/inspect_system.sh
+```
+
+Inspect every component:
+
+```bash
+LOG_LINES=80 bash scripts/inspect_all.sh
+```
+
 ## Export CSV For Report
 
 Export latest runs:
