@@ -13,8 +13,8 @@
   "editable": true,
   "graphTooltip": 1,
   "time": {
-    "from": "now-30m",
-    "to": "now"
+    "from": "2013-08-31T22:00:00Z",
+    "to": "2013-09-01T15:00:00Z"
   },
   "templating": {
     "list": [
@@ -26,14 +26,14 @@
           "type": "postgres",
           "uid": "timescaledb"
         },
-        "query": "SELECT DISTINCT run_id FROM house_metrics WHERE run_id <> 'default' ORDER BY run_id DESC",
+        "query": "SELECT run_id FROM house_metrics GROUP BY run_id ORDER BY MAX(time) DESC",
         "refresh": 1,
         "multi": false,
         "includeAll": false,
         "current": {
-          "selected": false,
-          "text": "",
-          "value": ""
+          "selected": true,
+          "text": "default",
+          "value": "default"
         }
       },
       {
@@ -49,9 +49,9 @@
         "multi": false,
         "includeAll": false,
         "current": {
-          "selected": false,
-          "text": "",
-          "value": ""
+          "selected": true,
+          "text": "1",
+          "value": "1"
         }
       }
     ]

@@ -10,6 +10,7 @@ datasources:
     secureJsonData:
       password: hiereb_pass
     jsonData:
+      database: hiereb_db
       sslmode: disable
       postgresVersion: 1600
       timescaledb: true
