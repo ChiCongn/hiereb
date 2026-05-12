@@ -26,7 +26,7 @@ log = structlog.get_logger(__name__)
 @dataclass
 class HouseMetricRecord:
     """One row to insert into house_metrics."""
-    timestamp_unix: int       # event-time from DEBS (unix seconds)
+    timestamp_unix: float     # stream-time unix seconds
     house_id: int
     actual_load: float        # Watts – transmitted + predicted-for-suppressed
     pred_load: float          # Watts – sum of predicted values

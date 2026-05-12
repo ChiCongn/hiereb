@@ -6,7 +6,8 @@ Reads DEBS CSV, replays at REPLAY_SPEED×, publishes to hiereb.sensor_data.
 Message format (1 message per house per timestamp):
 {
     "house_id":  int,
-    "timestamp": int,                    # event-time (unix seconds from DEBS)
+    "timestamp": float,                  # stream-time unix seconds
+    "source_timestamp": int,             # original DEBS event-time
     "plugs": [
         {
             "plug_uid":     int,
@@ -29,7 +30,6 @@ import asyncio
 import json
 import signal
 import time
-from pathlib import Path
 from typing import Any
 
 import structlog
@@ -43,7 +43,14 @@ from src.simulator.kafka_listeners import (
     consume_thresholds,
     publish_variance_update,
 )
-from src.simulator.loader import TimestepBatch, iter_timestep_batches, load_debs
+from src.simulator.loader import (
+    TimestepBatch,
+    data_window_seconds,
+    iter_timestep_batches,
+    load_debs_many,
+    resolve_data_files,
+    resolve_house_ids,
+)
 from src.simulator.plug_state import HouseState
 from src.simulator.stats import SimStats
 
@@ -60,6 +67,7 @@ def build_kafka_message(
     stats: SimStats,
     mode: str,
     uniform_delta: float | None = None,
+    output_timestamp: float | None = None,
 ) -> tuple[bytes, list[tuple[int, bool, float | None, float]]]:
     """
     Serialize one timestep batch to JSON bytes for Kafka.
@@ -97,7 +105,7 @@ def build_kafka_message(
         else:
             stats.record_suppress(reading.plug_uid)
 
-        # Queue variance update for hiereb mode
+        # Queue variance update for suppression modes.
         if mode != "full_tx":
             variance_updates.append(
                 (reading.plug_uid, transmitted, residual, plug.delta)
@@ -114,7 +122,8 @@ def build_kafka_message(
 
     payload = {
         "house_id": batch.house_id,
-        "timestamp": batch.timestamp,
+        "timestamp": batch.timestamp if output_timestamp is None else output_timestamp,
+        "source_timestamp": batch.timestamp,
         "plugs": plug_messages,
     }
 
@@ -122,6 +131,24 @@ def build_kafka_message(
         json.dumps(payload, separators=(",", ":")).encode("utf-8"),
         variance_updates,
     )
+
+
+def resolve_stream_timestamp(
+    source_timestamp: int,
+    *,
+    source_start_timestamp: int,
+    wall_start_timestamp: float,
+    replay_speed: int,
+    stream_time_mode: str,
+) -> float:
+    """Map source DEBS time to the timestamp published downstream."""
+    mode = stream_time_mode.strip().lower()
+    if mode == "source":
+        return float(source_timestamp)
+    if mode == "wall_clock":
+        speed = max(replay_speed, 1)
+        return wall_start_timestamp + ((source_timestamp - source_start_timestamp) / speed)
+    raise ValueError("STREAM_TIME_MODE must be 'wall_clock' or 'source'")
 
 
 # ─── Main simulation coroutine ────────────────────────────────────────────────
@@ -133,21 +160,38 @@ async def run_simulator() -> None:
         "simulator_starting",
         mode=settings.SUPPRESSION_MODE,
         replay_speed=settings.REPLAY_SPEED,
-        house_ids=settings.HOUSE_IDS,
-        data_file=settings.DATA_FILE,
+        dataset_preset=settings.DATASET_PRESET,
+        data_window=settings.DATA_WINDOW,
+        stream_time_mode=settings.STREAM_TIME_MODE,
     )
 
     # ── Load DEBS data (one-time, at startup) ─────────────────────────────
-    data_file = Path(settings.DATA_PATH) / settings.DATA_FILE
-    df = load_debs(
-        data_file,
+    data_files = resolve_data_files(
+        settings.DATA_PATH,
+        dataset_preset=settings.DATASET_PRESET,
+        data_window=settings.DATA_WINDOW,
+        data_file=settings.DATA_FILE,
+        data_glob=settings.DATA_GLOB,
+        one_house_id=settings.ONE_HOUSE_ID,
+        five_house_ids=settings.FIVE_HOUSE_IDS,
+    )
+    house_ids = resolve_house_ids(
+        settings.DATASET_PRESET,
         house_ids=settings.HOUSE_IDS,
+        one_house_id=settings.ONE_HOUSE_ID,
+        five_house_ids=settings.FIVE_HOUSE_IDS,
+    )
+    df = load_debs_many(
+        data_files,
+        house_ids=house_ids,
         property_filter=settings.PROPERTY_FILTER,
+        max_duration_seconds=data_window_seconds(settings.DATA_WINDOW),
     )
 
     # ── Initialise per-house state ─────────────────────────────────────────
+    effective_house_ids = sorted(int(h_id) for h_id in df["house_id"].unique())
     house_states: dict[int, HouseState] = {
-        h_id: HouseState(house_id=h_id) for h_id in settings.HOUSE_IDS
+        h_id: HouseState(house_id=h_id) for h_id in effective_house_ids
     }
     stats = SimStats()
 
@@ -196,6 +240,8 @@ async def run_simulator() -> None:
     last_log_time = time.monotonic()
     last_log_count = 0
     prev_ts: int | None = None
+    source_start_timestamp = int(df["timestamp"].min())
+    wall_start_timestamp = time.time()
 
     try:
         for batch in iter_timestep_batches(df):
@@ -211,8 +257,19 @@ async def run_simulator() -> None:
 
             # Build and send message
             house_state = house_states[batch.house_id]
+            output_timestamp = resolve_stream_timestamp(
+                batch.timestamp,
+                source_start_timestamp=source_start_timestamp,
+                wall_start_timestamp=wall_start_timestamp,
+                replay_speed=settings.REPLAY_SPEED,
+                stream_time_mode=settings.STREAM_TIME_MODE,
+            )
             payload, variance_updates = build_kafka_message(
-                batch, house_state, stats, settings.SUPPRESSION_MODE
+                batch,
+                house_state,
+                stats,
+                settings.SUPPRESSION_MODE,
+                output_timestamp=output_timestamp,
             )
 
             await producer.send(
@@ -238,7 +295,8 @@ async def run_simulator() -> None:
                 log.info(
                     "simulator_progress",
                     messages_sent=messages_sent,
-                    current_ts=batch.timestamp,
+                    source_ts=batch.timestamp,
+                    stream_ts=round(output_timestamp, 3),
                     overall_tr=round(stats.overall_tr, 4),
                     msg_per_sec=round(rate, 1),
                 )

@@ -19,7 +19,17 @@ class Settings(BaseSettings):
 
     # ── Data ──────────────────────────────────────────────────────────────────
     DATA_PATH: str = Field(default="/data")
+    # DATASET_PRESET chooses the source files without changing code.
+    # Hyphen aliases are accepted: one-house/five-house/all-house.
+    # Canonical values: custom | one_house | five_houses | all_house
+    DATASET_PRESET: str = Field(default="custom")
+    # DATA_WINDOW controls experiment duration/source subset:
+    # one_day/1d | five_days/5d | a_week/7d | all
+    DATA_WINDOW: str = Field(default="all")
     DATA_FILE: str = Field(default="house-1.csv")
+    DATA_GLOB: str = Field(default="")
+    ONE_HOUSE_ID: int = Field(default=1)
+    FIVE_HOUSE_IDS: list[int] = Field(default_factory=lambda: [0, 1, 2, 3, 4])
     # NOTE: pydantic-settings reads lists from env as JSON.
     # Example: HOUSE_IDS='[1]' or HOUSE_IDS='[0,1,2]'
     HOUSE_IDS: list[int] = Field(default=[1])
@@ -28,6 +38,9 @@ class Settings(BaseSettings):
     # ── Simulator ─────────────────────────────────────────────────────────────
     REPLAY_SPEED: int = Field(default=60)          # 60x real-time
     SUPPRESSION_MODE: str = Field(default="full_tx")
+    # wall_clock: write simulated stream timestamps near current time.
+    # source: keep original DEBS unix timestamps.
+    STREAM_TIME_MODE: str = Field(default="wall_clock")
     # full_tx  : always transmit (Week 1 baseline)
     # uniform  : suppress with fixed UNIFORM_DELTA
     # hiereb   : full HierEB water-filling (Week 2+)
@@ -37,6 +50,7 @@ class Settings(BaseSettings):
     TAU: int = Field(default=300)                  # reallocation interval (seconds of data-time)
     UNIFORM_DELTA: float = Field(default=10.0)     # Watts, for 'uniform' mode
     RUN_ID: str = Field(default="default")         # experiment/run namespace for DB rows
+    TRAINING_DAYS: int = Field(default=7)          # <=0 means use all loaded data
 
     # ── TimescaleDB ───────────────────────────────────────────────────────────
     DB_HOST: str = Field(default="timescaledb")

@@ -9,7 +9,8 @@ Architectural invariants (DO NOT VIOLATE):
     Predictions arrive embedded in each Kafka message from the simulator.
   - Aggregator distinguishes TRANSMITTED (value present) vs SUPPRESSED (value=null).
     For suppressed plugs, predicted value is used as the actual estimate.
-  - All timestamps are EVENT-TIME (from DEBS data), not processing-time.
+  - The simulator decides stream timestamps. In wall_clock mode, DB rows
+    appear near current time while source_timestamp keeps the original DEBS time.
 """
 from __future__ import annotations
 
@@ -55,7 +56,7 @@ class TimestepState:
     In hiereb mode, same assumption holds (simulator batches per house per ts).
     """
     house_id: int
-    timestamp: int           # event-time (unix seconds)
+    timestamp: float         # stream-time unix seconds
     snapshots: list[PlugSnapshot] = field(default_factory=list)
 
     def add_plug(self, snap: PlugSnapshot) -> None:
@@ -110,7 +111,7 @@ class HouseAggregator:
     def __init__(self, writer: TimescaleWriter) -> None:
         self._writer = writer
         # Keyed by (house_id, timestamp) – one entry per in-flight timestep
-        self._pending: dict[tuple[int, int], TimestepState] = {}
+        self._pending: dict[tuple[int, float], TimestepState] = {}
         self._metrics_written = 0
         self._messages_consumed = 0
 
@@ -182,7 +183,7 @@ class HouseAggregator:
         self._messages_consumed += 1
 
         house_id: int = data["house_id"]
-        timestamp: int = data["timestamp"]
+        timestamp = float(data["timestamp"])
         key = (house_id, timestamp)
 
         if key not in self._pending:
@@ -201,7 +202,7 @@ class HouseAggregator:
             ))
 
         # One message = one complete timestep for a house (simulator guarantee).
-        # Flush immediately.
+        # The writer batches records and flushes by DB_WRITE_BATCH_SIZE/periodic flush.
         record = state.to_metric()
         await self._writer.enqueue(record)
         del self._pending[key]

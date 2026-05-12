@@ -45,7 +45,6 @@ from __future__ import annotations
 import asyncio
 import json
 import signal
-from pathlib import Path
 from typing import Any
 
 import structlog
@@ -55,7 +54,12 @@ from config.logging_config import configure_logging
 from config.settings import settings
 from src.ml_hiereb.allocator import HierEBAllocator
 from src.ml_hiereb.predictor import TimeSlicePredictor
-from src.simulator.loader import load_debs
+from src.simulator.loader import (
+    data_window_seconds,
+    load_debs_many,
+    resolve_data_files,
+    resolve_house_ids,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -273,23 +277,45 @@ async def _main() -> None:
         "ml_hiereb_starting",
         epsilon_h=settings.EPSILON_H,
         tau=settings.TAU,
-        house_ids=settings.HOUSE_IDS,
+        dataset_preset=settings.DATASET_PRESET,
+        data_window=settings.DATA_WINDOW,
     )
 
     # ── Load and split data ────────────────────────────────────────────────
-    data_file = Path(settings.DATA_PATH) / settings.DATA_FILE
-    df_full = load_debs(data_file, house_ids=settings.HOUSE_IDS)
+    data_files = resolve_data_files(
+        settings.DATA_PATH,
+        dataset_preset=settings.DATASET_PRESET,
+        data_window=settings.DATA_WINDOW,
+        data_file=settings.DATA_FILE,
+        data_glob=settings.DATA_GLOB,
+        one_house_id=settings.ONE_HOUSE_ID,
+        five_house_ids=settings.FIVE_HOUSE_IDS,
+    )
+    house_ids = resolve_house_ids(
+        settings.DATASET_PRESET,
+        house_ids=settings.HOUSE_IDS,
+        one_house_id=settings.ONE_HOUSE_ID,
+        five_house_ids=settings.FIVE_HOUSE_IDS,
+    )
+    df_full = load_debs_many(
+        data_files,
+        house_ids=house_ids,
+        property_filter=settings.PROPERTY_FILTER,
+        max_duration_seconds=data_window_seconds(settings.DATA_WINDOW),
+    )
 
-    # Training split: first 7 days
-    SEVEN_DAYS = 7 * 24 * 3600
     ts_min = df_full["timestamp"].min()
     initial_batch_start = int(ts_min)
-    df_train = df_full[df_full["timestamp"] < ts_min + SEVEN_DAYS]
+    if settings.TRAINING_DAYS <= 0:
+        df_train = df_full
+    else:
+        training_seconds = settings.TRAINING_DAYS * 24 * 3600
+        df_train = df_full[df_full["timestamp"] < ts_min + training_seconds]
     log.info(
         "training_split",
         total_rows=len(df_full),
         training_rows=len(df_train),
-        training_days=7,
+        training_days=settings.TRAINING_DAYS,
     )
 
     # ── Fit predictor ──────────────────────────────────────────────────────

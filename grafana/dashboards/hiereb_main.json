@@ -13,8 +13,8 @@
   "editable": true,
   "graphTooltip": 1,
   "time": {
-    "from": "2013-08-31T22:00:00Z",
-    "to": "2013-09-01T15:00:00Z"
+    "from": "now-1h",
+    "to": "now"
   },
   "templating": {
     "list": [
