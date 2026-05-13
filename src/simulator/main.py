@@ -105,6 +105,8 @@ def build_kafka_message(
         else:
             stats.record_suppress(reading.plug_uid)
 
+        plug.observe(reading.value, reading.timestamp)
+
         # Queue variance update for suppression modes.
         if mode != "full_tx":
             variance_updates.append(

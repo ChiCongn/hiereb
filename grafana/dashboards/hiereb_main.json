@@ -44,14 +44,14 @@
           "type": "postgres",
           "uid": "timescaledb"
         },
-        "query": "SELECT DISTINCT house_id FROM house_metrics WHERE run_id = '$run_id' ORDER BY house_id",
+        "query": "SELECT house_id FROM house_metrics WHERE run_id = '$run_id' GROUP BY house_id ORDER BY MAX(time) DESC",
         "refresh": 2,
         "multi": false,
         "includeAll": false,
         "current": {
           "selected": true,
-          "text": "1",
-          "value": "1"
+          "text": "0",
+          "value": "0"
         }
       }
     ]

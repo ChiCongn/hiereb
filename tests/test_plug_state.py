@@ -34,11 +34,17 @@ def test_full_tx_mode_always_transmits():
     assert plug.should_transmit(actual=9999.0, timestamp=1000) is True
 
 
-def test_no_prediction_uses_zero_as_fallback():
+def test_no_prediction_uses_zero_before_first_observation():
     plug = make_plug()
     plug.set_delta(10.0)
     assert plug.should_transmit(actual=5.0, timestamp=9999) is False   # |5-0| = 5 < 10
     assert plug.should_transmit(actual=15.0, timestamp=9999) is True   # |15-0| = 15 > 10
+
+
+def test_missing_prediction_uses_last_observed_value():
+    plug = make_plug()
+    plug.observe(42.0, 1000)
+    assert plug.get_prediction(1001) == pytest.approx(42.0)
 
 
 def test_suppression_boundary_exact_delta_suppresses():
@@ -52,13 +58,24 @@ def test_suppression_boundary_exact_delta_suppresses():
     assert plug.should_transmit(89.99, 1000) is True    # negative side
 
 
-def test_update_predictions_replaces_old_cache():
+def test_update_predictions_merges_batches():
     plug = make_plug()
     plug.update_predictions({1000: 50.0, 1001: 55.0})
     plug.update_predictions({2000: 60.0})
 
-    assert plug.get_prediction(1000) == 0.0
+    assert plug.get_prediction(1000) == 50.0
     assert plug.get_prediction(2000) == 60.0
+
+
+def test_observe_prunes_predictions_far_from_current_timestamp():
+    plug = make_plug()
+    plug.prediction_cache_max_seconds = 10
+    plug.update_predictions({1000: 50.0, 1010: 55.0, 2000: 60.0})
+    plug.observe(42.0, 1005)
+
+    assert plug.get_prediction(1000) == 50.0
+    assert plug.get_prediction(1010) == 55.0
+    assert 2000 not in plug.predictions
 
 
 def test_set_delta_negative_raises():

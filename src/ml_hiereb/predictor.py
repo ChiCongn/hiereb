@@ -2,7 +2,7 @@
 Time-Slice Median Predictor.
 
 For each plug, predicts load based on the median value observed at the same
-(hour_of_day, day_of_week) bin in the training data.
+(day_of_week, time-of-day bin) in the training data.
 
 Why time-slice median (not mean)?
   - Robust to outliers (AC spikes, anomalies)
@@ -33,10 +33,11 @@ import structlog
 
 log = structlog.get_logger(__name__)
 
-# Bin key: (hour_of_day [0-23], day_of_week [0=Mon, 6=Sun])
+# Bin key: (hour_of_day [0-23], day_of_week [0=Mon, 6=Sun], bin within hour)
 class SliceKey(NamedTuple):
     hour: int
     dow: int
+    bin_index: int = 0
 
 
 @dataclass
@@ -45,10 +46,11 @@ class PlugPredictor:
     Prediction model for a single plug.
 
     Stores two lookup tables:
-      - slice_medians: (hour, dow) → median load (Watts)
+      - slice_medians: (hour, dow, bin_index) → median load (Watts)
       - global_median: fallback when slice has no training data
     """
     plug_uid: int
+    bin_seconds: int = 3600
     slice_medians: dict[SliceKey, float] = field(default_factory=dict)
     global_median: float = 0.0
     n_training_samples: int = 0
@@ -60,7 +62,8 @@ class PlugPredictor:
         Falls back to global_median if the (hour, dow) bin has no data.
         """
         dt = pd.Timestamp(timestamp_unix, unit="s", tz="UTC")
-        key = SliceKey(hour=dt.hour, dow=dt.dayofweek)
+        bin_index = ((dt.minute * 60) + dt.second) // self.bin_seconds
+        key = SliceKey(hour=dt.hour, dow=dt.dayofweek, bin_index=bin_index)
         return self.slice_medians.get(key, self.global_median)
 
 
@@ -74,7 +77,10 @@ class TimeSlicePredictor:
         preds = predictor.predict_batch(uid, start_ts, n=300)
     """
 
-    def __init__(self) -> None:
+    def __init__(self, bin_seconds: int = 3600) -> None:
+        if bin_seconds <= 0 or bin_seconds > 3600:
+            raise ValueError("bin_seconds must be in range 1..3600")
+        self._bin_seconds = bin_seconds
         self._plug_models: dict[int, PlugPredictor] = {}
 
     def fit(self, df: pd.DataFrame) -> None:
@@ -101,6 +107,9 @@ class TimeSlicePredictor:
         df["_dt"] = pd.to_datetime(df["timestamp"], unit="s", utc=True)
         df["_hour"] = df["_dt"].dt.hour
         df["_dow"] = df["_dt"].dt.dayofweek
+        df["_bin"] = (
+            (df["_dt"].dt.minute * 60 + df["_dt"].dt.second) // self._bin_seconds
+        )
 
         plug_count = df["plug_uid"].nunique()
         log.info("predictor_fitting", plug_count=plug_count, training_rows=len(df))
@@ -111,17 +120,18 @@ class TimeSlicePredictor:
 
             # Per-slice medians
             slice_stats = (
-                plug_df.groupby(["_hour", "_dow"])["value"]
+                plug_df.groupby(["_hour", "_dow", "_bin"])["value"]
                 .median()
             )
 
             slice_medians: dict[SliceKey, float] = {
-                SliceKey(hour=int(h), dow=int(d)): float(v)
-                for (h, d), v in slice_stats.items()
+                SliceKey(hour=int(h), dow=int(d), bin_index=int(b)): float(v)
+                for (h, d, b), v in slice_stats.items()
             }
 
             self._plug_models[int(plug_uid)] = PlugPredictor(
                 plug_uid=int(plug_uid),
+                bin_seconds=self._bin_seconds,
                 slice_medians=slice_medians,
                 global_median=global_med,
                 n_training_samples=len(plug_df),
@@ -130,6 +140,7 @@ class TimeSlicePredictor:
         log.info(
             "predictor_fitted",
             plug_count=len(self._plug_models),
+            bin_seconds=self._bin_seconds,
             slice_bins_total=sum(len(m.slice_medians) for m in self._plug_models.values()),
         )
 

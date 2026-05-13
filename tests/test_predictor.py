@@ -119,6 +119,20 @@ def test_predict_batch_values_non_negative():
     assert all(v >= 0 for v in preds.values())
 
 
+def test_predictor_supports_finer_time_bins():
+    base_ts = 1_700_000_000
+    df = pd.DataFrame([
+        {"timestamp": base_ts, "value": 10.0, "plug_uid": 1},
+        {"timestamp": base_ts + 300, "value": 90.0, "plug_uid": 1},
+    ])
+
+    predictor = TimeSlicePredictor(bin_seconds=300)
+    predictor.fit(df)
+
+    assert predictor.predict_single(1, base_ts) == pytest.approx(10.0)
+    assert predictor.predict_single(1, base_ts + 300) == pytest.approx(90.0)
+
+
 # ─── predict_single() ─────────────────────────────────────────────────────────
 
 def test_predict_single_known_plug():

@@ -11,6 +11,8 @@ from typing import Dict
 
 import structlog
 
+from config.settings import settings
+
 log = structlog.get_logger(__name__)
 
 
@@ -27,19 +29,55 @@ class PlugState:
 
     # Week 2+: populated from hiereb.predictions topic
     predictions: Dict[int, float] = field(default_factory=dict)
+    prediction_cache_max_seconds: int = field(
+        default_factory=lambda: settings.PREDICTION_CACHE_MAX_SECONDS
+    )
+
+    # Last observed source-side value. Used as persistence fallback when the
+    # async prediction stream is temporarily late or ahead of replay time.
+    last_value: float | None = None
+    last_timestamp: int | None = None
 
     # Week 1: math.inf = full_tx (always transmit)
     # Week 2+: set by water-filling allocator
     delta: float = field(default=math.inf)
 
     def get_prediction(self, timestamp: int) -> float:
-        """Return predicted load or 0.0 if not available (graceful fallback)."""
-        return self.predictions.get(timestamp, 0.0)
+        """Return prediction for timestamp, falling back to last observed value."""
+        if timestamp in self.predictions:
+            return self.predictions[timestamp]
+        if self.last_value is not None:
+            return self.last_value
+        return 0.0
 
     def update_predictions(self, predictions: Dict[int, float]) -> None:
-        """Replace current prediction batch (called when receiving new batch from ML)."""
-        self.predictions = dict(predictions)  # copy
-        log.debug("predictions_updated", plug_uid=self.plug_uid, count=len(predictions))
+        """Merge a prediction batch into the cache."""
+        self.predictions.update(predictions)
+        self._prune_predictions()
+        log.debug(
+            "predictions_updated",
+            plug_uid=self.plug_uid,
+            added=len(predictions),
+            cached=len(self.predictions),
+        )
+
+    def observe(self, value: float, timestamp: int) -> None:
+        """Record the latest source-side value and prune stale/far-future predictions."""
+        self.last_value = value
+        self.last_timestamp = timestamp
+        self._prune_predictions()
+
+    def _prune_predictions(self) -> None:
+        if self.last_timestamp is None or not self.predictions:
+            return
+
+        keep_from = self.last_timestamp - self.prediction_cache_max_seconds
+        keep_to = self.last_timestamp + self.prediction_cache_max_seconds
+        self.predictions = {
+            ts: value
+            for ts, value in self.predictions.items()
+            if keep_from <= ts <= keep_to
+        }
 
     def set_delta(self, delta: float) -> None:
         """Update suppression threshold from allocator."""

@@ -319,7 +319,7 @@ async def _main() -> None:
     )
 
     # ── Fit predictor ──────────────────────────────────────────────────────
-    predictor = TimeSlicePredictor()
+    predictor = TimeSlicePredictor(bin_seconds=settings.PREDICTOR_BIN_SECONDS)
     predictor.fit(df_train)
 
     # ── Build house structure ──────────────────────────────────────────────

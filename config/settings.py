@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     UNIFORM_DELTA: float = Field(default=10.0)     # Watts, for 'uniform' mode
     RUN_ID: str = Field(default="default")         # experiment/run namespace for DB rows
     TRAINING_DAYS: int = Field(default=7)          # <=0 means use all loaded data
+    # Prediction granularity for time-slice median. 300 = 5-minute bins.
+    PREDICTOR_BIN_SECONDS: int = Field(default=300)
+    # Simulator keeps prediction batches around the current source timestamp.
+    PREDICTION_CACHE_MAX_SECONDS: int = Field(default=1800)
 
     # ── TimescaleDB ───────────────────────────────────────────────────────────
     DB_HOST: str = Field(default="timescaledb")
