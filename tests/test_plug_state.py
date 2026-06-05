@@ -34,17 +34,29 @@ def test_full_tx_mode_always_transmits():
     assert plug.should_transmit(actual=9999.0, timestamp=1000) is True
 
 
-def test_no_prediction_uses_zero_before_first_observation():
+def test_no_prediction_forces_transmit_before_first_observation():
     plug = make_plug()
     plug.set_delta(10.0)
-    assert plug.should_transmit(actual=5.0, timestamp=9999) is False   # |5-0| = 5 < 10
-    assert plug.should_transmit(actual=15.0, timestamp=9999) is True   # |15-0| = 15 > 10
+    decision = plug.decide_transmission(actual=5.0, timestamp=9999)
+
+    assert decision.transmitted is True
+    assert decision.predicted is None
+    assert decision.residual is None
+    assert decision.reason == "missing_prediction"
+    assert decision.is_forced_transmit is True
 
 
-def test_missing_prediction_uses_last_observed_value():
+def test_missing_prediction_does_not_use_last_observed_value():
     plug = make_plug()
     plug.observe(42.0, 1000)
-    assert plug.get_prediction(1001) == pytest.approx(42.0)
+    plug.set_delta(100.0)
+    decision = plug.decide_transmission(actual=42.0, timestamp=1001)
+
+    assert plug.get_prediction(1001) is None
+    assert decision.transmitted is True
+    assert decision.predicted is None
+    assert decision.reason == "missing_prediction"
+    assert decision.is_forced_transmit is True
 
 
 def test_suppression_boundary_exact_delta_suppresses():
@@ -56,6 +68,21 @@ def test_suppression_boundary_exact_delta_suppresses():
     assert plug.should_transmit(110.0, 1000) is False   # exactly 10 → suppress
     assert plug.should_transmit(110.01, 1000) is True   # 10.01 > 10 → transmit
     assert plug.should_transmit(89.99, 1000) is True    # negative side
+
+
+def test_decision_records_residual_for_known_prediction():
+    plug = make_plug()
+    plug.set_delta(10.0)
+    plug.update_predictions({1000: 100.0})
+
+    decision = plug.decide_transmission(111.0, 1000)
+
+    assert decision.transmitted is True
+    assert decision.predicted == pytest.approx(100.0)
+    assert decision.residual == pytest.approx(11.0)
+    assert decision.abs_residual == pytest.approx(11.0)
+    assert decision.reason == "normal"
+    assert decision.is_forced_transmit is False
 
 
 def test_update_predictions_merges_batches():

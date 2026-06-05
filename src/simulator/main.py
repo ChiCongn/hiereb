@@ -14,7 +14,11 @@ Message format (1 message per house per timestamp):
             "plug_id":      int,
             "household_id": int,
             "value":        float | null, # null when suppressed
-            "predicted":    float,
+            "predicted":    float | null,
+            "predicted_load": float | null,
+            "residual":     float | null,
+            "reason":       str,
+            "is_forced_transmit": bool,
             "transmitted":  bool
         },
         ...
@@ -87,21 +91,21 @@ def build_kafka_message(
             plug_id=reading.plug_id,
         )
 
-        predicted = plug.get_prediction(reading.timestamp)
-
         if mode == "full_tx":
-            transmitted = True
+            decision = plug.decide_transmission(
+                reading.value,
+                reading.timestamp,
+                bypass_suppression=True,
+            )
         elif mode == "uniform":
             if plug.delta == float("inf"):
                 plug.set_delta(settings.UNIFORM_DELTA if uniform_delta is None else uniform_delta)
-            transmitted = plug.should_transmit(reading.value, reading.timestamp)
+            decision = plug.decide_transmission(reading.value, reading.timestamp)
         else:
-            transmitted = plug.should_transmit(reading.value, reading.timestamp)
+            decision = plug.decide_transmission(reading.value, reading.timestamp)
 
-        residual = reading.value - predicted if transmitted else None
-
-        if transmitted:
-            stats.record_transmit(reading.plug_uid, residual if residual is not None else 0.0)
+        if decision.transmitted:
+            stats.record_transmit(reading.plug_uid, decision.residual)
         else:
             stats.record_suppress(reading.plug_uid)
 
@@ -109,17 +113,23 @@ def build_kafka_message(
 
         # Queue variance update for suppression modes.
         if mode != "full_tx":
+            variance_residual = decision.residual if decision.transmitted else None
             variance_updates.append(
-                (reading.plug_uid, transmitted, residual, plug.delta)
+                (reading.plug_uid, decision.transmitted, variance_residual, plug.delta)
             )
 
         plug_messages.append({
             "plug_uid": reading.plug_uid,
             "plug_id": reading.plug_id,
             "household_id": reading.household_id,
-            "value": reading.value if transmitted else None,
-            "predicted": predicted,
-            "transmitted": transmitted,
+            "value": reading.value if decision.transmitted else None,
+            "predicted": decision.predicted,
+            "predicted_load": decision.predicted,
+            "residual": decision.residual,
+            "abs_residual": decision.abs_residual,
+            "reason": decision.reason,
+            "is_forced_transmit": decision.is_forced_transmit,
+            "transmitted": decision.transmitted,
         })
 
     payload = {

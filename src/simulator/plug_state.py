@@ -16,6 +16,17 @@ from config.settings import settings
 log = structlog.get_logger(__name__)
 
 
+@dataclass(frozen=True)
+class TransmissionDecision:
+    """Decision metadata for one plug event."""
+    transmitted: bool
+    predicted: float | None
+    residual: float | None
+    abs_residual: float | None
+    reason: str
+    is_forced_transmit: bool
+
+
 @dataclass
 class PlugState:
     """
@@ -33,8 +44,8 @@ class PlugState:
         default_factory=lambda: settings.PREDICTION_CACHE_MAX_SECONDS
     )
 
-    # Last observed source-side value. Used as persistence fallback when the
-    # async prediction stream is temporarily late or ahead of replay time.
+    # Last observed source-side value is debug/state metadata only. It must not
+    # be used as prediction fallback for the suppression metric path.
     last_value: float | None = None
     last_timestamp: int | None = None
 
@@ -42,13 +53,9 @@ class PlugState:
     # Week 2+: set by water-filling allocator
     delta: float = field(default=math.inf)
 
-    def get_prediction(self, timestamp: int) -> float:
-        """Return prediction for timestamp, falling back to last observed value."""
-        if timestamp in self.predictions:
-            return self.predictions[timestamp]
-        if self.last_value is not None:
-            return self.last_value
-        return 0.0
+    def get_prediction(self, timestamp: int) -> float | None:
+        """Return cached prediction for timestamp, or None if it is missing."""
+        return self.predictions.get(timestamp)
 
     def update_predictions(self, predictions: Dict[int, float]) -> None:
         """Merge a prediction batch into the cache."""
@@ -86,18 +93,69 @@ class PlugState:
         self.delta = delta
         log.debug("delta_updated", plug_uid=self.plug_uid, new_delta=delta)
 
+    def decide_transmission(
+        self,
+        actual: float,
+        timestamp: int,
+        *,
+        bypass_suppression: bool = False,
+    ) -> TransmissionDecision:
+        """
+        Core suppression decision with audit metadata.
+
+        Missing prediction is a forced transmit in suppression modes. A full_tx
+        caller can pass bypass_suppression=True so no threshold rule is applied.
+        """
+        predicted = self.get_prediction(timestamp)
+        residual = actual - predicted if predicted is not None else None
+        abs_residual = abs(residual) if residual is not None else None
+
+        if bypass_suppression:
+            return TransmissionDecision(
+                transmitted=True,
+                predicted=predicted,
+                residual=residual,
+                abs_residual=abs_residual,
+                reason="normal",
+                is_forced_transmit=False,
+            )
+
+        if predicted is None:
+            return TransmissionDecision(
+                transmitted=True,
+                predicted=None,
+                residual=None,
+                abs_residual=None,
+                reason="missing_prediction",
+                is_forced_transmit=True,
+            )
+
+        if self.delta == math.inf:
+            return TransmissionDecision(
+                transmitted=True,
+                predicted=predicted,
+                residual=residual,
+                abs_residual=abs_residual,
+                reason="normal",
+                is_forced_transmit=False,
+            )
+
+        transmitted = abs_residual > self.delta
+        return TransmissionDecision(
+            transmitted=transmitted,
+            predicted=predicted,
+            residual=residual,
+            abs_residual=abs_residual,
+            reason="normal",
+            is_forced_transmit=False,
+        )
+
     def should_transmit(self, actual: float, timestamp: int) -> bool:
         """
-        Core suppression decision (b_p(t) = 1 if |x - x̂| > δ).
+        Core suppression decision (b_p(t) = 1 if |x - xhat| > delta).
         Exactly equal to delta → suppress (important boundary behavior).
         """
-        if self.delta == math.inf:          # full_tx mode
-            return True
-
-        predicted = self.get_prediction(timestamp)
-        diff = abs(actual - predicted)
-
-        return diff > self.delta
+        return self.decide_transmission(actual, timestamp).transmitted
 
 
 @dataclass

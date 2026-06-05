@@ -165,13 +165,13 @@ async def publish_variance_update(
         producer:    shared AIOKafkaProducer
         plug_uid:    globally unique plug ID
         transmitted: True if plug transmitted this timestep
-        residual:    actual - predicted (only meaningful if transmitted=True)
+        residual:    actual - predicted, or None if suppressed/missing prediction
         delta:       current delta for this plug
     """
     payload = json.dumps({
         "plug_uid": plug_uid,
         "transmitted": transmitted,
-        "residual": residual,    # None if suppressed
+        "residual": residual,    # None if suppressed or prediction is missing
         "delta": delta,
     }, separators=(",", ":")).encode()
 

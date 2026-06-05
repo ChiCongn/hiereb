@@ -104,11 +104,11 @@ def test_predict_batch_constant_value():
         assert val == pytest.approx(100.0)
 
 
-def test_predict_batch_unknown_plug_returns_zero():
+def test_predict_batch_unknown_plug_returns_missing_prediction():
     predictor = TimeSlicePredictor()
     predictor.fit(make_training_df(plug_uid=1))
     preds = predictor.predict_batch(plug_uid=999, start_ts=1_700_000_000, n=5)
-    assert all(v == pytest.approx(0.0) for v in preds.values())
+    assert preds == {}
 
 
 def test_predict_batch_values_non_negative():
@@ -145,7 +145,7 @@ def test_predict_single_known_plug():
 def test_predict_single_unknown_plug():
     predictor = TimeSlicePredictor()
     predictor.fit(make_training_df())
-    assert predictor.predict_single(plug_uid=42, timestamp=1_700_000_000) == pytest.approx(0.0)
+    assert predictor.predict_single(plug_uid=42, timestamp=1_700_000_000) is None
 
 
 # ─── time-slice correctness ───────────────────────────────────────────────────

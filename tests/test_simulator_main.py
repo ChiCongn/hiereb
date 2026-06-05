@@ -82,6 +82,36 @@ def test_build_kafka_message_uniform_suppresses_within_delta():
     assert stats.overall_tr == pytest.approx(0.0)
 
 
+def test_build_kafka_message_missing_prediction_forces_transmit():
+    house_state = HouseState(house_id=1)
+    plug_uid = make_plug_uid(1, 2, 3)
+    plug = house_state.get_or_create_plug(plug_uid, household_id=2, plug_id=3)
+    plug.observe(105.0, 999)
+    stats = SimStats()
+
+    payload, variance_updates = build_kafka_message(
+        make_batch(value=105.0),
+        house_state,
+        stats,
+        mode="uniform",
+        uniform_delta=10.0,
+    )
+
+    data = json.loads(payload)
+    plug_msg = data["plugs"][0]
+
+    assert plug_msg["value"] == pytest.approx(105.0)
+    assert plug_msg["predicted"] is None
+    assert plug_msg["predicted_load"] is None
+    assert plug_msg["residual"] is None
+    assert plug_msg["abs_residual"] is None
+    assert plug_msg["reason"] == "missing_prediction"
+    assert plug_msg["is_forced_transmit"] is True
+    assert plug_msg["transmitted"] is True
+    assert variance_updates == [(plug_uid, True, None, 10.0)]
+    assert stats.overall_tr == pytest.approx(1.0)
+
+
 def test_build_kafka_message_can_use_wall_clock_timestamp():
     house_state = HouseState(house_id=1)
     stats = SimStats()

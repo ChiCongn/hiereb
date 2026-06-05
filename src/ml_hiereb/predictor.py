@@ -14,7 +14,7 @@ Training:
   - Each plug gets a lookup table: (hour, dow) → median value
 
 Inference:
-  - predict_batch(plug_uid, start_ts, n) returns n predictions
+  - predict_batch(plug_uid, start_ts, n) returns n predictions for known plugs
   - Fallback: if no training data for a (hour, dow) bin → global median
 
 NOT responsible for:
@@ -160,11 +160,11 @@ class TimeSlicePredictor:
 
         Returns:
             dict mapping timestamp → predicted load (Watts)
-            Returns {ts: 0.0} for unknown plug (not seen in training).
+            Returns an empty dict for unknown plug (not seen in training).
         """
         if plug_uid not in self._plug_models:
             log.warning("predict_unknown_plug", plug_uid=plug_uid)
-            return {start_ts + i: 0.0 for i in range(n)}
+            return {}
 
         model = self._plug_models[plug_uid]
         result: dict[int, float] = {}
@@ -175,10 +175,10 @@ class TimeSlicePredictor:
 
         return result
 
-    def predict_single(self, plug_uid: int, timestamp: int) -> float:
+    def predict_single(self, plug_uid: int, timestamp: int) -> float | None:
         """Convenience: predict one timestamp for one plug."""
         if plug_uid not in self._plug_models:
-            return 0.0
+            return None
         return self._plug_models[plug_uid].predict(timestamp)
 
     def known_plug_uids(self) -> list[int]:
@@ -187,8 +187,8 @@ class TimeSlicePredictor:
     def is_fitted(self) -> bool:
         return len(self._plug_models) > 0
 
-    def plug_global_median(self, plug_uid: int) -> float:
+    def plug_global_median(self, plug_uid: int) -> float | None:
         """Return global median for a plug. Used by allocator for sigma initialisation."""
         if plug_uid not in self._plug_models:
-            return 0.0
+            return None
         return self._plug_models[plug_uid].global_median

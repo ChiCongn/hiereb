@@ -41,6 +41,15 @@ def test_stats_welford_variance():
     assert var > 0.0
 
 
+def test_stats_transmit_with_missing_residual_does_not_fake_variance():
+    stats = SimStats(house_id=0)
+
+    stats.record_transmit(plug_uid=1, error=None)
+
+    assert stats.transmission_rate() == pytest.approx(1.0)
+    assert 1 not in stats.variance_states
+
+
 def test_stats_empty_state():
     stats = SimStats(house_id=0)
     assert stats.transmission_rate() == 0.0

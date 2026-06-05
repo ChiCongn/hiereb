@@ -34,7 +34,7 @@ Quy tắc cập nhật:
 |---|---|---|---|---|
 | P00 | `done` | Prompt 00 | Baseline snapshot và test hiện tại | `2026-06-05T20:34:03+07:00`; pytest `111 passed in 0.84s` |
 | P01 | `done` | Prompt 01 | Data contract: `property=1`, window, invalid, duplicate, sort | `2026-06-05T20:44:48+07:00`; related tests `50 passed`; full pytest `118 passed` |
-| P02 | `todo` | Prompt 02 | Predictor và missing prediction forced transmit | Chưa có |
+| P02 | `done` | Prompt 02 | Predictor và missing prediction forced transmit | `2026-06-05T21:11:37+07:00`; related tests `42 passed`; full pytest `121 passed` |
 | P03 | `todo` | Prompt 03 | Event decisions và reconstruction metric | Chưa có |
 | P04A | `todo` | Prompt 04 | Uniform active-budget baseline | Chưa có |
 | P04B | `todo` | Prompt 05 | HierEB allocator budget/timing/sigma_floor | Chưa có |
@@ -58,7 +58,7 @@ Trạng thái tài liệu điều phối:
 |---|---|---|---|---|---|---|
 | P0-01 | P0 | `done` | P01 | Default experiment dùng `property=1`; docs không còn nói `property=0` là load | `rg -n "property.*0.*load\|PROPERTY_FILTER=0\|--property 0" config .env.example README.md scripts src tests` | Dùng cho DEBS load |
 | P0-02 | P0 | `done` | P01 | Warm-up/evaluation window tuyệt đối, không overlap | `pytest tests/test_loader.py -q` | Cần deterministic |
-| P0-03 | P0 | `todo` | P02 | Missing prediction luôn forced transmit | `pytest tests/test_predictor.py tests/test_plug_state.py -q` | Không dùng last value làm fallback metric |
+| P0-03 | P0 | `done` | P02 | Missing prediction luôn forced transmit | `pytest tests/test_predictor.py tests/test_plug_state.py -q` | Không dùng last value làm fallback metric |
 | P0-04 | P0 | `todo` | P03 | Metric chính là `actual_load` vs `reconstructed_load` | `pytest tests/test_aggregator.py tests/test_simulator_main.py -q` | Không dùng residual predictor làm house RMSE |
 | P0-05 | P0 | `todo` | P03 | `full_tx` có reconstruction error bằng 0 | `pytest tests/test_aggregator.py -q` | Predictor error có thể ghi riêng |
 | P0-06 | P0 | `todo` | P04A | Uniform dùng active-budget: `delta_p = Delta_H / N_budget_active` | `pytest tests/test_plug_state.py tests/test_simulator_main.py -q` | Cần metadata active plug |
@@ -119,14 +119,23 @@ Baseline phải được ghi sau khi chạy Prompt 00.
 
 ### P02 - Predictor và missing prediction
 
-- Trạng thái: `todo`
-- File dự kiến: `src/ml_hiereb/predictor.py`, `src/simulator/plug_state.py`,
-  `src/simulator/main.py`, `tests/test_predictor.py`, `tests/test_plug_state.py`,
-  `tests/test_simulator_main.py`
-- Test đã chạy: chưa có
-- Kết quả: chưa có
+- Trạng thái: `done`
+- File đã sửa: `src/ml_hiereb/predictor.py`, `src/simulator/plug_state.py`,
+  `src/simulator/main.py`, `src/simulator/kafka_listeners.py`,
+  `src/simulator/stats.py`, `tests/test_predictor.py`, `tests/test_plug_state.py`,
+  `tests/test_simulator_main.py`, `tests/test_stats.py`
+- Test đã chạy:
+  - `python3 -m compileall src/ml_hiereb src/simulator tests`
+  - `.venv/bin/python -m pytest tests/test_predictor.py tests/test_plug_state.py tests/test_simulator_main.py -q`
+  - `.venv/bin/python -m pytest tests/test_predictor.py tests/test_plug_state.py tests/test_simulator_main.py tests/test_stats.py -q`
+  - `.venv/bin/python -m pytest -q`
+- Kết quả:
+  - Compile: pass
+  - Predictor/plug_state/simulator tests: `35 passed in 0.33s`
+  - Related tests with stats: `42 passed in 0.39s`
+  - Full suite: `121 passed in 0.68s`
 - Blocker: không có
-- Next step: chờ P01 done
+- Next step: chạy Prompt 03 để sửa event decisions và reconstruction metric
 
 ### P03 - Event decisions và reconstruction metric
 
@@ -330,6 +339,41 @@ Baseline phải được ghi sau khi chạy Prompt 00.
   - Không có.
 - Next step:
   - Chạy Prompt 02 để sửa missing prediction forced transmit.
+
+### 2026-06-05T21:11:37+07:00 - Phase P02: Predictor và missing prediction
+
+- Trạng thái: `done`
+- File đã sửa:
+  - `src/ml_hiereb/predictor.py`
+  - `src/simulator/plug_state.py`
+  - `src/simulator/main.py`
+  - `src/simulator/kafka_listeners.py`
+  - `src/simulator/stats.py`
+  - `tests/test_predictor.py`
+  - `tests/test_plug_state.py`
+  - `tests/test_simulator_main.py`
+  - `tests/test_stats.py`
+  - `docs/requirments/hiereb_completion_progress_log.md`
+- Lệnh đã chạy:
+  - `python3 -m compileall src/ml_hiereb src/simulator tests`
+  - `.venv/bin/python -m pytest tests/test_predictor.py tests/test_plug_state.py tests/test_simulator_main.py -q`
+  - `.venv/bin/python -m pytest tests/test_predictor.py tests/test_plug_state.py tests/test_simulator_main.py tests/test_stats.py -q`
+  - `.venv/bin/python -m pytest -q`
+- Kết quả:
+  - Compile: pass.
+  - Predictor/plug_state/simulator tests: `35 passed in 0.33s`.
+  - Related tests with stats: `42 passed in 0.39s`.
+  - Full suite: `121 passed in 0.68s`.
+- Acceptance evidence:
+  - Unknown plug trong predictor trả missing prediction (`{}` hoặc `None`), không trả `0.0`.
+  - `PlugState.get_prediction()` chỉ trả prediction cache hoặc `None`; không fallback sang `last_value` hoặc `0.0`.
+  - Missing prediction trong suppression mode forced transmit với `predicted_load=null`, `residual=null`, `reason=missing_prediction`, `is_forced_transmit=true`.
+  - `last_value` vẫn được lưu để debug/state nhưng test xác nhận không được dùng làm prediction fallback.
+  - Strict `abs_residual > delta` vẫn giữ: bằng delta thì suppress.
+- Blocker:
+  - Không có.
+- Next step:
+  - Chạy Prompt 03 để sửa event decisions và reconstruction metric.
 
 ## 7. Mẫu log cho các lần cập nhật sau
 

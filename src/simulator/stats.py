@@ -49,11 +49,12 @@ class SimStats:
             self.variance_states[plug_uid] = WelfordState()
         return self.variance_states[plug_uid]
 
-    def record_transmit(self, plug_uid: int, error: float) -> None:
+    def record_transmit(self, plug_uid: int, error: float | None) -> None:
         """Record a transmitted reading."""
         self.transmitted += 1
         self.total_timesteps += 1
-        self.get_or_create_variance(plug_uid).update(error)
+        if error is not None:
+            self.get_or_create_variance(plug_uid).update(error)
 
     def record_suppress(self, plug_uid: int) -> None:
         """Record a suppressed reading (censored)."""
