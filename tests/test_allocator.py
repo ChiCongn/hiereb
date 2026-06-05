@@ -12,7 +12,7 @@ import math
 
 import pytest
 
-from src.ml_hiereb.allocator import HierEBAllocator, WelfordState
+from src.ml_hiereb.allocator import HierEBAllocator, PlugVarianceState, WelfordState
 
 
 # ─── WelfordState ─────────────────────────────────────────────────────────────
@@ -76,17 +76,15 @@ def seed_allocator(
     plug_sigmas: dict[int, float],
 ) -> None:
     """
-    Seed sigma estimates via Welford state.
+    Seed effective rolling variance samples.
 
-    For a target sigma s, we add two Welford samples [0, s*√2].
-    This gives: mean=s*√2/2, M2=s², sample_var=s², std=s. Exact.
+    A repeated residual with absolute value s gives rolling variance s² and
+    sigma s under the allocator's zero-mean effective-residual contract.
     """
-    import math
     for plug_uid, sigma in plug_sigmas.items():
         state = alloc.get_or_create_plug(plug_uid)
-        # Two samples that produce exactly sigma
-        state.welford.update(0.0)
-        state.welford.update(sigma * math.sqrt(2))
+        for _ in range(alloc.min_variance_samples):
+            state.record_transmitted(sigma)
 
 
 def test_water_fill_proportional_to_sigma():
@@ -105,7 +103,7 @@ def test_water_fill_proportional_to_sigma():
 def test_water_fill_sums_to_epsilon():
     """
     For a single household: sum of deltas should equal epsilon_h.
-    (Assuming sigma >> minimum floor 0.1W so no clipping.)
+    No positive min-delta clipping is allowed in the baseline.
     """
     epsilon_h = 100.0
     alloc = HierEBAllocator(epsilon_h=epsilon_h)
@@ -130,15 +128,16 @@ def test_water_fill_equal_sigma_equal_delta():
     assert deltas[103] == pytest.approx(30.0, abs=0.01)
 
 
-def test_water_fill_floor_at_0_1():
-    """Very small sigma still gets minimum delta of 0.1W."""
-    alloc = HierEBAllocator(epsilon_h=0.001)  # tiny epsilon
-    seed_allocator(alloc, {101: 0.0001, 102: 0.0001, 103: 0.0001})
+def test_no_min_delta_floor_keeps_tiny_budget_bound():
+    """A positive min delta would blow this budget; baseline must not use one."""
+    structure = {1: {0: list(range(1000, 1100))}}
+    alloc = HierEBAllocator(epsilon_h=0.001, min_variance_samples=1)
+    seed_allocator(alloc, {plug_uid: 0.0001 for plug_uid in structure[1][0]})
 
-    deltas = alloc.reallocate(SIMPLE_STRUCTURE)
+    deltas = alloc.reallocate(structure)
 
-    for delta in deltas.values():
-        assert delta >= 0.1
+    assert sum(deltas.values()) <= 0.001 + 1e-12
+    assert max(deltas.values()) < 0.1
 
 
 # ─── Two-stage allocation ─────────────────────────────────────────────────────
@@ -196,10 +195,11 @@ def test_censored_correction_increases_sigma():
 
     # No transmitted, only suppressed
     for _ in range(100):
-        state.record_suppressed(delta=10.0)
+        state.record_suppressed(delta_used=10.0)
 
     sigma = state.estimate_sigma()
-    assert sigma > 0.0
+    assert state.variance == pytest.approx((10.0 ** 2) / 3.0)
+    assert sigma == pytest.approx(math.sqrt((10.0 ** 2) / 3.0))
 
 
 def test_transmitted_updates_welford():
@@ -215,13 +215,12 @@ def test_transmitted_updates_welford():
 def test_censored_buffer_clears_after_realloc():
     alloc = HierEBAllocator(epsilon_h=0.05)
     state = alloc.get_or_create_plug(plug_uid=1)
-    state.sigma = 5.0
     state.record_suppressed(10.0)
     state.record_suppressed(10.0)
 
-    assert len(state.censored_deltas) == 2
+    assert state.effective_sample_count == 2
     alloc.reallocate({0: {0: [1]}})
-    assert len(state.censored_deltas) == 0
+    assert state.effective_sample_count == 2
 
 
 # ─── Delta persistence ────────────────────────────────────────────────────────
@@ -233,3 +232,93 @@ def test_get_delta_after_realloc():
 
     assert alloc.get_delta(101) == pytest.approx(50.0, abs=0.1)
     assert alloc.get_delta(102) == pytest.approx(50.0, abs=0.1)
+
+
+def test_sigma_floor_fixed_from_warmup_and_zero_variance_gets_weight():
+    alloc = HierEBAllocator(
+        epsilon_h=30.0,
+        sigma_floor_by_house={1: 2.5},
+        min_variance_samples=30,
+    )
+    for plug_uid in [101, 102, 103]:
+        for _ in range(30):
+            alloc.update_from_transmitted(plug_uid, 0.0)
+
+    deltas = alloc.reallocate(SIMPLE_STRUCTURE)
+
+    assert alloc.sigma_floor_for_house(1) == pytest.approx(2.5)
+    assert deltas[101] == pytest.approx(10.0)
+    assert deltas[102] == pytest.approx(10.0)
+    assert deltas[103] == pytest.approx(10.0)
+
+    alloc.update_from_transmitted(101, 100.0)
+    alloc.reallocate(SIMPLE_STRUCTURE)
+    assert alloc.sigma_floor_for_house(1) == pytest.approx(2.5)
+
+
+def test_inactive_plugs_get_zero_and_do_not_consume_budget():
+    alloc = HierEBAllocator(epsilon_h=90.0, min_variance_samples=1)
+    seed_allocator(alloc, {101: 1.0, 102: 1.0, 103: 1.0})
+
+    deltas = alloc.reallocate(
+        SIMPLE_STRUCTURE,
+        active_plug_uids_by_house={1: {101, 103}},
+    )
+
+    assert deltas[101] == pytest.approx(45.0)
+    assert deltas[102] == pytest.approx(0.0)
+    assert deltas[103] == pytest.approx(45.0)
+    assert sum(deltas.values()) == pytest.approx(90.0)
+
+
+def test_cold_start_uses_household_then_house_median_weight():
+    structure = {1: {0: [101, 102], 1: [201]}}
+    alloc = HierEBAllocator(epsilon_h=90.0, min_variance_samples=30)
+    for _ in range(30):
+        alloc.update_from_transmitted(101, 4.0)
+
+    deltas = alloc.reallocate(structure)
+
+    assert deltas[101] == pytest.approx(30.0)
+    assert deltas[102] == pytest.approx(30.0)
+    assert deltas[201] == pytest.approx(30.0)
+
+
+def test_censored_contribution_uses_old_delta_used_squared_over_three():
+    state = PlugVarianceState(plug_uid=1)
+
+    state.record_suppressed(6.0)
+
+    assert state.effective_sample_count == 1
+    assert state.variance == pytest.approx(12.0)
+    assert state.estimate_sigma() == pytest.approx(math.sqrt(12.0))
+
+
+def test_rolling_window_keeps_1000_effective_samples():
+    state = PlugVarianceState(plug_uid=1, rolling_window_size=1000)
+
+    for _ in range(1000):
+        state.record_transmitted(1.0)
+    for _ in range(5):
+        state.record_transmitted(3.0)
+
+    assert state.effective_sample_count == 1000
+    assert state.variance == pytest.approx(((995 * 1.0) + (5 * 9.0)) / 1000)
+
+
+def test_threshold_trace_records_timing_and_version():
+    alloc = HierEBAllocator(epsilon_h=10.0, min_variance_samples=1)
+    seed_allocator(alloc, {101: 1.0, 102: 1.0, 103: 1.0})
+
+    alloc.reallocate(
+        SIMPLE_STRUCTURE,
+        allocation_time=2000,
+        effective_after_time=2000,
+        threshold_version=7,
+    )
+
+    trace = alloc.latest_trace_by_house[1]
+    assert trace.allocation_time == 2000
+    assert trace.effective_after_time == 2000
+    assert trace.threshold_version == 7
+    assert trace.budget_sum <= 10.0 + 1e-12

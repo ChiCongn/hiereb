@@ -63,8 +63,6 @@ async def consume_predictions(
                 data: dict[str, Any] = json.loads(msg.value)
                 plug_uid: int = data["plug_uid"]
                 raw_preds: dict[str, float] = data["predictions"]
-                delta: float = data.get("delta", float("inf"))
-
                 # Parse timestamp keys (JSON keys are always strings)
                 predictions = {int(ts): val for ts, val in raw_preds.items()}
 
@@ -75,7 +73,6 @@ async def consume_predictions(
                     if plug_uid in house_state.plugs:
                         plug = house_state.plugs[plug_uid]
                         plug.update_predictions(predictions)
-                        plug.set_delta(delta)
                         break
                 else:
                     house_id, household_id, plug_id = decode_plug_uid(plug_uid)
@@ -83,7 +80,6 @@ async def consume_predictions(
                     if house_state is not None:
                         plug = house_state.get_or_create_plug(plug_uid, household_id, plug_id)
                         plug.update_predictions(predictions)
-                        plug.set_delta(delta)
                     else:
                         log.debug("prediction_for_unconfigured_house", plug_uid=plug_uid, house_id=house_id)
 
@@ -107,7 +103,13 @@ async def consume_thresholds(
     Consumes hiereb.thresholds and updates all plug deltas for the given house.
 
     Message format:
-      {house_id, deltas: {plug_uid_str: delta_float}}
+      {
+        house_id,
+        deltas: {plug_uid_str: delta_float},
+        allocation_time,
+        effective_after_time,
+        threshold_version
+      }
     """
     consumer = AIOKafkaConsumer(
         TOPIC_THRESHOLDS,
@@ -127,16 +129,33 @@ async def consume_thresholds(
                 data: dict[str, Any] = json.loads(msg.value)
                 house_id: int = data["house_id"]
                 raw_deltas: dict[str, float] = data["deltas"]
+                allocation_time = data.get("allocation_time")
+                effective_after_time = data.get("effective_after_time", allocation_time)
+                threshold_version = data.get("threshold_version")
 
                 # Convert string keys back to int
                 new_deltas = {int(uid): delta for uid, delta in raw_deltas.items()}
 
                 if house_id in house_states:
-                    house_states[house_id].update_deltas(new_deltas, create_missing=True)
+                    if allocation_time is None:
+                        house_states[house_id].update_deltas(new_deltas, create_missing=True)
+                    else:
+                        house_states[house_id].stage_hiereb_thresholds(
+                            new_deltas,
+                            allocation_time=int(allocation_time),
+                            effective_after_time=int(effective_after_time),
+                            threshold_version=(
+                                None if threshold_version is None else int(threshold_version)
+                            ),
+                            create_missing=True,
+                        )
                     log.debug(
-                        "thresholds_applied",
+                        "thresholds_received",
                         house_id=house_id,
                         plug_count=len(new_deltas),
+                        allocation_time=allocation_time,
+                        effective_after_time=effective_after_time,
+                        threshold_version=threshold_version,
                     )
 
                 received += 1
@@ -155,6 +174,7 @@ async def publish_variance_update(
     transmitted: bool,
     residual: float | None,
     delta: float,
+    timestamp: int | None = None,
 ) -> None:
     """
     Publish one variance observation to hiereb.variance.
@@ -167,13 +187,18 @@ async def publish_variance_update(
         transmitted: True if plug transmitted this timestep
         residual:    actual - predicted, or None if suppressed/missing prediction
         delta:       current delta for this plug
+        timestamp:   source event-time for active-window tracking
     """
-    payload = json.dumps({
+    payload_data: dict[str, Any] = {
         "plug_uid": plug_uid,
         "transmitted": transmitted,
         "residual": residual,    # None if suppressed or prediction is missing
         "delta": delta,
-    }, separators=(",", ":")).encode()
+    }
+    if timestamp is not None:
+        payload_data["timestamp"] = timestamp
+
+    payload = json.dumps(payload_data, separators=(",", ":")).encode()
 
     await producer.send(
         TOPIC_VARIANCE,

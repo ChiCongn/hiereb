@@ -37,7 +37,7 @@ Quy tắc cập nhật:
 | P02 | `done` | Prompt 02 | Predictor và missing prediction forced transmit | `2026-06-05T21:11:37+07:00`; related tests `42 passed`; full pytest `121 passed` |
 | P03 | `done` | Prompt 03 | Event decisions và reconstruction metric | `2026-06-05T21:19:59+07:00`; aggregator/simulator tests `17 passed`; full pytest `124 passed` |
 | P04A | `done` | Prompt 04 | Uniform active-budget baseline | `2026-06-05T21:31:39+07:00`; related tests `32 passed`; full pytest `132 passed` |
-| P04B | `todo` | Prompt 05 | HierEB allocator budget/timing/sigma_floor | Chưa có |
+| P04B | `done` | Prompt 05 | HierEB allocator budget/timing/sigma_floor | `2026-06-05T21:52:45+07:00`; allocator/ML tests `30 passed`; full pytest `143 passed` |
 | P05 | `todo` | Prompt 06 | Sáu CSV output đúng schema | Chưa có |
 | P06 | `todo` | Prompt 07 | Rolling metrics và summary metrics | Chưa có |
 | P07 | `todo` | Prompt 08 | Sweep runner và metadata `run_id` | Chưa có |
@@ -62,10 +62,10 @@ Trạng thái tài liệu điều phối:
 | P0-04 | P0 | `done` | P03 | Metric chính là `actual_load` vs `reconstructed_load` | `pytest tests/test_aggregator.py tests/test_simulator_main.py -q` | Không dùng residual predictor làm house RMSE |
 | P0-05 | P0 | `done` | P03 | `full_tx` có reconstruction error bằng 0 | `pytest tests/test_aggregator.py -q` | Predictor error có thể ghi riêng |
 | P0-06 | P0 | `done` | P04A | Uniform dùng active-budget: `delta_p = Delta_H / N_budget_active` | `pytest tests/test_plug_state.py tests/test_simulator_main.py -q` | Có metadata active plug trong `HouseState` |
-| P0-07 | P0 | `todo` | P04B | HierEB allocator bảo toàn budget, không inflate do `delta_min` | `pytest tests/test_allocator.py -q` | Có assertion tổng threshold |
+| P0-07 | P0 | `done` | P04B | HierEB allocator bảo toàn budget, không inflate do `delta_min` | `pytest tests/test_allocator.py -q` | Có assertion tổng threshold |
 | P1-01 | P1 | `done` | P01 | Invalid value, duplicate và sort stable được xử lý | `pytest tests/test_loader.py tests/test_partition_debs_by_house.py -q` | Duplicate giữ `id` lớn nhất |
-| P1-02 | P1 | `todo` | P04B | `sigma_floor` cố định từ warm-up toàn house | `pytest tests/test_allocator.py -q` | Không dùng percentile runtime |
-| P1-03 | P1 | `todo` | P04B | Threshold update có `threshold_version` và `effective_after_time` | `pytest tests/test_allocator.py tests/test_simulator_main.py -q` | Tránh retroactive decision |
+| P1-02 | P1 | `done` | P04B | `sigma_floor` cố định từ warm-up toàn house | `pytest tests/test_allocator.py -q` | Không dùng percentile runtime |
+| P1-03 | P1 | `done` | P04B | Threshold update có `threshold_version` và `effective_after_time` | `pytest tests/test_allocator.py tests/test_simulator_main.py -q` | Tránh retroactive decision |
 | P1-04 | P1 | `todo` | P04A/P04B | Inactive plug và reactivation không phá budget | `pytest tests/test_allocator.py tests/test_plug_state.py -q` | Active set cần rõ |
 | P1-05 | P1 | `todo` | P06 | Rolling metrics tính theo event-time window | `pytest tests/test_aggregator.py -q` | Cửa sổ 1 giờ nếu không có yêu cầu khác |
 | P1-06 | P1 | `todo` | P05 | Export đủ 6 CSV: events, metrics_per_plug, metrics_per_household, metrics_per_house, experiments_summary, threshold_history | `pytest tests/test_exports.py -q` | Schema phải ổn định |
@@ -185,13 +185,36 @@ Baseline phải được ghi sau khi chạy Prompt 00.
 
 ### P04B - HierEB allocator
 
-- Trạng thái: `todo`
-- File dự kiến: `src/ml_hiereb/allocator.py`, `src/ml_hiereb/main.py`,
-  `src/simulator/main.py`, `tests/test_allocator.py`, `tests/test_simulator_main.py`
-- Test đã chạy: chưa có
-- Kết quả: chưa có
+- Trạng thái: `done`
+- File đã sửa: `src/ml_hiereb/allocator.py`, `src/ml_hiereb/main.py`,
+  `src/simulator/kafka_listeners.py`, `src/simulator/plug_state.py`,
+  `src/simulator/main.py`, `tests/test_allocator.py`, `tests/test_ml_main.py`,
+  `tests/test_simulator_main.py`
+- Test đã chạy:
+  - `python3 -m compileall src/ml_hiereb src/simulator tests`
+  - `.venv/bin/python -m pytest tests/test_allocator.py tests/test_ml_main.py tests/test_simulator_main.py tests/test_plug_state.py -q`
+  - `.venv/bin/python -m pytest tests/test_allocator.py tests/test_ml_main.py -q`
+  - `.venv/bin/python -m pytest -q`
+  - `rg -n "max\\([^\\n]*0\\.1|floor at 0\\.1|minimum floor 0\\.1|minimum 0\\.1|delta_min|censored_deltas" src/ml_hiereb src/simulator`
+- Kết quả:
+  - Compile: pass.
+  - Allocator/ML/simulator/plug-state tests: `59 passed in 0.32s`.
+  - Allocator/ML acceptance tests: `30 passed in 0.34s`.
+  - Full suite: `143 passed in 0.79s`.
+  - `rg` verification: không có output trong source cho floor `0.1`, `delta_min`, hoặc buffer censored cũ.
+- Acceptance evidence:
+  - `sigma_floor_H` được tính một lần từ warm-up residual bằng percentile 5 của sigma dương; fallback `1.0 W`.
+  - Allocator giữ `sigma_floor_H` cố định trong evaluation.
+  - Weight dùng `w_p = max(sqrt(max(v_p, 0)), sigma_floor_H)` cho plug đủ mẫu.
+  - Cold start dùng median household weight, rồi median house weight, rồi fallback `1.0 W`.
+  - Cập nhật transmitted dùng residual thật; suppressed dùng `delta_used^2 / 3` với threshold cũ tại decision.
+  - Rolling window giữ `1000` effective residual samples per plug.
+  - Inactive plug nhận `delta=0` và không chiếm budget dương; runtime ML loop tính active set từ variance event-time.
+  - Có `ThresholdTrace` nội bộ với `allocation_time`, `effective_after_time`, `threshold_version`.
+  - Threshold message Kafka có metadata trace; simulator stage threshold và chỉ activate khi `timestamp > effective_after_time`.
+  - Test budget-bound bắt `sum(delta_p) <= Delta_H` cả trường hợp epsilon nhỏ/nhiều plug.
 - Blocker: không có
-- Next step: chờ P03 và P04A đủ nền metric
+- Next step: chạy Prompt 06 để tạo sáu CSV output đúng schema
 
 ### P05 - Sáu CSV output
 
@@ -466,6 +489,46 @@ Baseline phải được ghi sau khi chạy Prompt 00.
   - Không có.
 - Next step:
   - Chạy Prompt 05 để sửa HierEB allocator budget/timing/sigma_floor.
+
+### 2026-06-05T21:52:45+07:00 - Phase P04B: HierEB allocator
+
+- Trạng thái: `done`
+- File đã sửa:
+  - `src/ml_hiereb/allocator.py`
+  - `src/ml_hiereb/main.py`
+  - `src/simulator/kafka_listeners.py`
+  - `src/simulator/plug_state.py`
+  - `src/simulator/main.py`
+  - `tests/test_allocator.py`
+  - `tests/test_ml_main.py`
+  - `tests/test_simulator_main.py`
+  - `docs/requirments/hiereb_completion_progress_log.md`
+- Lệnh đã chạy:
+  - `python3 -m compileall src/ml_hiereb src/simulator tests`
+  - `.venv/bin/python -m pytest tests/test_allocator.py tests/test_ml_main.py tests/test_simulator_main.py tests/test_plug_state.py -q`
+  - `.venv/bin/python -m pytest tests/test_allocator.py tests/test_ml_main.py -q`
+  - `.venv/bin/python -m pytest -q`
+  - `rg -n "max\\([^\\n]*0\\.1|floor at 0\\.1|minimum floor 0\\.1|minimum 0\\.1|delta_min|censored_deltas" src/ml_hiereb src/simulator`
+- Kết quả:
+  - Compile: pass.
+  - Allocator/ML/simulator/plug-state tests: `59 passed in 0.32s`.
+  - Allocator/ML acceptance tests: `30 passed in 0.34s`.
+  - Full suite: `143 passed in 0.79s`.
+  - `rg` verification: không có output cho hard-coded floor `0.1`, `delta_min`, hoặc censored buffer cũ trong source.
+- Acceptance evidence:
+  - Allocator dùng fixed `sigma_floor_H` từ warm-up và không recompute percentile runtime.
+  - Không còn min delta dương trong baseline; allocation có assertion `sum(delta_p) <= Delta_H`.
+  - Variance bằng `0` vẫn nhận weight bằng `sigma_floor_H`.
+  - Cold start dùng fallback median household, median house, rồi `1.0 W`.
+  - Suppressed update dùng `delta_used^2 / 3`; transmitted update dùng residual thật.
+  - Rolling window đúng `1000` effective residual samples.
+  - Inactive plugs nhận delta `0` và không chiếm budget; active set được tính từ timestamp trên variance stream.
+  - Threshold trace/payload có `allocation_time`, `effective_after_time`, `threshold_version`.
+  - Simulator chỉ apply staged HierEB threshold khi event timestamp lớn hơn `effective_after_time`.
+- Blocker:
+  - Không có.
+- Next step:
+  - Chạy Prompt 06 để tạo sáu CSV output đúng schema.
 
 ## 7. Mẫu log cho các lần cập nhật sau
 

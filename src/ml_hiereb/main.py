@@ -43,7 +43,9 @@ Message schemas:
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import json
+import math
 import signal
 from typing import Any
 
@@ -52,7 +54,11 @@ from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 
 from config.logging_config import configure_logging
 from config.settings import settings
-from src.ml_hiereb.allocator import HierEBAllocator
+from src.ml_hiereb.allocator import (
+    DEFAULT_ROLLING_WINDOW_SIZE,
+    SIGMA_FLOOR_FALLBACK,
+    HierEBAllocator,
+)
 from src.ml_hiereb.predictor import TimeSlicePredictor
 from src.simulator.loader import (
     load_debs,
@@ -66,6 +72,7 @@ TOPIC_PREDICTIONS = "hiereb.predictions"
 TOPIC_THRESHOLDS = "hiereb.thresholds"
 TOPIC_VARIANCE = "hiereb.variance"
 CONSUMER_GROUP = "hiereb-ml"
+WarmupResidualsByHouse = dict[int, dict[int, list[float]]]
 
 # ─── House structure helper ───────────────────────────────────────────────────
 
@@ -137,6 +144,187 @@ def resolve_error_budget_from_load_stats(
     return epsilon_h * (sum(means) / len(means))
 
 
+def collect_warmup_residuals_by_house(
+    df,
+    predictor: TimeSlicePredictor,
+    *,
+    rolling_window_size: int = DEFAULT_ROLLING_WINDOW_SIZE,
+) -> WarmupResidualsByHouse:
+    """Collect signed warm-up residuals per house/plug using fitted predictions."""
+    required = {"house_id", "plug_uid", "timestamp", "value"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Warm-up DataFrame missing columns: {missing}")
+
+    buffers: dict[int, dict[int, deque[float]]] = {}
+    for row in df[["house_id", "plug_uid", "timestamp", "value"]].itertuples(index=False):
+        house_id = int(row.house_id)
+        plug_uid = int(row.plug_uid)
+        prediction = predictor.predict_single(plug_uid, int(row.timestamp))
+        if prediction is None:
+            continue
+        house_buffers = buffers.setdefault(house_id, {})
+        plug_buffer = house_buffers.setdefault(
+            plug_uid,
+            deque(maxlen=rolling_window_size),
+        )
+        plug_buffer.append(float(row.value) - float(prediction))
+
+    return {
+        house_id: {plug_uid: list(residuals) for plug_uid, residuals in plugs.items()}
+        for house_id, plugs in buffers.items()
+    }
+
+
+def merge_warmup_residuals_by_house(
+    target: dict[int, dict[int, deque[float]]],
+    incoming: WarmupResidualsByHouse,
+    *,
+    rolling_window_size: int = DEFAULT_ROLLING_WINDOW_SIZE,
+) -> None:
+    """Merge residual windows from one partition, keeping only the last N samples."""
+    for house_id, plug_residuals in incoming.items():
+        target_house = target.setdefault(house_id, {})
+        for plug_uid, residuals in plug_residuals.items():
+            target_buffer = target_house.setdefault(
+                plug_uid,
+                deque(maxlen=rolling_window_size),
+            )
+            target_buffer.extend(residuals)
+
+
+def freeze_warmup_residuals_by_house(
+    residual_buffers: dict[int, dict[int, deque[float]]],
+) -> WarmupResidualsByHouse:
+    """Convert mutable warm-up residual buffers into plain lists."""
+    return {
+        house_id: {plug_uid: list(residuals) for plug_uid, residuals in plugs.items()}
+        for house_id, plugs in residual_buffers.items()
+    }
+
+
+def flatten_warmup_residuals_by_plug(
+    residuals_by_house: WarmupResidualsByHouse,
+) -> dict[int, list[float]]:
+    """Return {plug_uid: residuals} for allocator seeding."""
+    return {
+        plug_uid: residuals
+        for plug_residuals in residuals_by_house.values()
+        for plug_uid, residuals in plug_residuals.items()
+    }
+
+
+def _sample_sigma(residuals: list[float]) -> float:
+    if len(residuals) < 2:
+        return 0.0
+    mean = sum(residuals) / len(residuals)
+    variance = sum((value - mean) ** 2 for value in residuals) / (len(residuals) - 1)
+    return math.sqrt(max(variance, 0.0))
+
+
+def _percentile(values: list[float], percentile: float) -> float:
+    ordered = sorted(values)
+    if not ordered:
+        raise ValueError("percentile requires at least one value")
+    if len(ordered) == 1:
+        return ordered[0]
+    rank = (percentile / 100.0) * (len(ordered) - 1)
+    lower = math.floor(rank)
+    upper = math.ceil(rank)
+    if lower == upper:
+        return ordered[lower]
+    fraction = rank - lower
+    return ordered[lower] + ((ordered[upper] - ordered[lower]) * fraction)
+
+
+def compute_sigma_floor_by_house(
+    residuals_by_house: WarmupResidualsByHouse,
+) -> dict[int, float]:
+    """
+    Compute fixed sigma_floor_H from warm-up residual sigmas.
+
+    sigma_floor_H = percentile_5({sigma_p > 0 in house}); fallback is 1W.
+    """
+    result: dict[int, float] = {}
+    for house_id, plug_residuals in residuals_by_house.items():
+        positive_sigmas = [
+            sigma
+            for residuals in plug_residuals.values()
+            if (sigma := _sample_sigma(residuals)) > 0
+        ]
+        result[house_id] = (
+            _percentile(positive_sigmas, 5.0)
+            if positive_sigmas
+            else SIGMA_FLOOR_FALLBACK
+        )
+    return result
+
+
+def build_threshold_payload(
+    allocator: HierEBAllocator,
+    house_id: int,
+    plug_uids: list[int],
+    deltas: dict[int, float],
+) -> bytes:
+    """Build one hiereb.thresholds message with trace metadata."""
+    trace = allocator.latest_trace_by_house[house_id]
+    house_deltas = {
+        str(plug_uid): deltas.get(plug_uid, allocator.get_delta(plug_uid))
+        for plug_uid in plug_uids
+    }
+    payload = {
+        "house_id": house_id,
+        "deltas": house_deltas,
+        "allocation_time": trace.allocation_time,
+        "effective_after_time": trace.effective_after_time,
+        "threshold_version": trace.threshold_version,
+        "sigma_floor_used": trace.sigma_floor,
+        "n_budget_active_plugs": trace.n_budget_active_plugs,
+    }
+    return json.dumps(payload, separators=(",", ":")).encode()
+
+
+def resolve_active_plug_uids_by_house(
+    house_structure: dict[int, dict[int, list[int]]],
+    last_event_timestamp_by_plug: dict[int, int],
+    *,
+    allocation_time: int,
+    active_window_seconds: int,
+) -> dict[int, set[int]]:
+    """Return budget-active plug sets for the allocator at allocation_time."""
+    if active_window_seconds < 0:
+        raise ValueError("active_window_seconds must be non-negative")
+    active_by_house: dict[int, set[int]] = {}
+    for house_id, households in house_structure.items():
+        active_set: set[int] = set()
+        for plug_uids in households.values():
+            for plug_uid in plug_uids:
+                last_seen = last_event_timestamp_by_plug.get(plug_uid)
+                if last_seen is None:
+                    continue
+                if allocation_time - last_seen <= active_window_seconds:
+                    active_set.add(plug_uid)
+        active_by_house[house_id] = active_set
+    return active_by_house
+
+
+async def publish_thresholds(
+    producer: AIOKafkaProducer,
+    allocator: HierEBAllocator,
+    house_structure: dict[int, dict[int, list[int]]],
+    deltas: dict[int, float],
+) -> None:
+    """Publish threshold messages for all houses."""
+    for house_id, hh_struct in house_structure.items():
+        all_plugs = [p for hh in hh_struct.values() for p in hh]
+        payload = build_threshold_payload(allocator, house_id, all_plugs, deltas)
+        await producer.send(
+            TOPIC_THRESHOLDS,
+            key=str(house_id).encode(),
+            value=payload,
+        )
+
+
 # ─── Three concurrent tasks ───────────────────────────────────────────────────
 
 async def prediction_loop(
@@ -202,6 +390,7 @@ async def prediction_loop(
 async def variance_consumer_loop(
     allocator: HierEBAllocator,
     shutdown: asyncio.Event,
+    last_event_timestamp_by_plug: dict[int, int] | None = None,
 ) -> None:
     """
     Consumes hiereb.variance messages and feeds residuals into the allocator.
@@ -233,6 +422,12 @@ async def variance_consumer_loop(
             plug_uid: int = data["plug_uid"]
             transmitted: bool = data["transmitted"]
             delta: float = data.get("delta", 0.0)
+            event_timestamp = data.get("timestamp")
+            if event_timestamp is not None and last_event_timestamp_by_plug is not None:
+                last_event_timestamp_by_plug[plug_uid] = max(
+                    int(event_timestamp),
+                    last_event_timestamp_by_plug.get(plug_uid, int(event_timestamp)),
+                )
 
             if transmitted:
                 residual = data.get("residual")
@@ -255,12 +450,15 @@ async def reallocation_loop(
     house_structure: dict[int, dict[int, list[int]]],
     producer: AIOKafkaProducer,
     shutdown: asyncio.Event,
+    initial_allocation_time: int,
+    last_event_timestamp_by_plug: dict[int, int],
 ) -> None:
     """
     Every TAU seconds: run water-filling, publish new deltas to hiereb.thresholds.
     """
     tau = settings.TAU
     sleep_seconds = _scaled_sleep_seconds(tau)
+    allocation_time = initial_allocation_time
 
     while not shutdown.is_set():
         try:
@@ -270,32 +468,29 @@ async def reallocation_loop(
         if shutdown.is_set():
             break
 
-        new_deltas = allocator.reallocate(house_structure)
+        allocation_time += tau
+        active_plug_uids_by_house = resolve_active_plug_uids_by_house(
+            house_structure,
+            last_event_timestamp_by_plug,
+            allocation_time=allocation_time,
+            active_window_seconds=settings.ACTIVE_WINDOW_SECONDS,
+        )
+        new_deltas = allocator.reallocate(
+            house_structure,
+            active_plug_uids_by_house=active_plug_uids_by_house,
+            allocation_time=allocation_time,
+            effective_after_time=allocation_time,
+        )
 
-        # Publish per house (one message per house)
-        for house_id, hh_struct in house_structure.items():
-            all_plugs = [p for hh in hh_struct.values() for p in hh]
-            house_deltas = {
-                str(p): new_deltas.get(p, allocator.get_delta(p))
-                for p in all_plugs
-            }
-
-            payload = json.dumps({
-                "house_id": house_id,
-                "deltas": house_deltas,
-            }, separators=(",", ":")).encode()
-
-            await producer.send(
-                TOPIC_THRESHOLDS,
-                key=str(house_id).encode(),
-                value=payload,
-            )
+        await publish_thresholds(producer, allocator, house_structure, new_deltas)
 
         log.info(
             "thresholds_published",
             house_count=len(house_structure),
             plug_count=len(new_deltas),
             tau=tau,
+            allocation_time=allocation_time,
+            active_plug_count=sum(len(active) for active in active_plug_uids_by_house.values()),
             sleep_seconds=round(sleep_seconds, 3),
         )
 
@@ -336,6 +531,8 @@ async def _main() -> None:
     house_structure: dict[int, dict[int, list[int]]] = {}
     load_sum_by_house: dict[int, float] = {}
     sample_count_by_house: dict[int, int] = {}
+    warmup_residual_buffers_by_house: dict[int, dict[int, deque[float]]] = {}
+    last_event_timestamp_by_plug: dict[int, int] = {}
     initial_batch_start: int | None = settings.EVAL_START
     total_rows = 0
     total_training_rows = 0
@@ -357,6 +554,16 @@ async def _main() -> None:
 
         predictor.fit(df_train)
         merge_house_structure(house_structure, build_house_structure(df_full))
+        partition_residuals = collect_warmup_residuals_by_house(
+            df_train,
+            predictor,
+            rolling_window_size=DEFAULT_ROLLING_WINDOW_SIZE,
+        )
+        merge_warmup_residuals_by_house(
+            warmup_residual_buffers_by_house,
+            partition_residuals,
+            rolling_window_size=DEFAULT_ROLLING_WINDOW_SIZE,
+        )
 
         house_load = df_train.groupby(["house_id", "timestamp"])["value"].sum()
         per_house_stats = house_load.groupby("house_id").agg(["sum", "count"])
@@ -391,6 +598,10 @@ async def _main() -> None:
     )
 
     # ── Init allocator ─────────────────────────────────────────────────────
+    warmup_residuals_by_house = freeze_warmup_residuals_by_house(
+        warmup_residual_buffers_by_house
+    )
+    sigma_floor_by_house = compute_sigma_floor_by_house(warmup_residuals_by_house)
     epsilon_h_watts = resolve_error_budget_from_load_stats(
         load_sum_by_house,
         sample_count_by_house,
@@ -400,8 +611,24 @@ async def _main() -> None:
         "error_budget_resolved",
         epsilon_h_config=settings.EPSILON_H,
         epsilon_h_watts=round(epsilon_h_watts, 4),
+        sigma_floor_by_house={
+            house_id: round(floor, 4)
+            for house_id, floor in sigma_floor_by_house.items()
+        },
     )
-    allocator = HierEBAllocator(epsilon_h=epsilon_h_watts)
+    allocator = HierEBAllocator(
+        epsilon_h=epsilon_h_watts,
+        sigma_floor_by_house=sigma_floor_by_house,
+    )
+    allocator.seed_warmup_residuals(
+        flatten_warmup_residuals_by_plug(warmup_residuals_by_house)
+    )
+    initial_deltas = allocator.reallocate(
+        house_structure,
+        allocation_time=settings.EVAL_START,
+        effective_after_time=settings.EVAL_START - 1,
+        threshold_version=0,
+    )
 
     # ── Kafka producer ─────────────────────────────────────────────────────
     producer = AIOKafkaProducer(
@@ -410,6 +637,14 @@ async def _main() -> None:
         acks="all",
     )
     await producer.start()
+    await publish_thresholds(producer, allocator, house_structure, initial_deltas)
+    log.info(
+        "initial_thresholds_published",
+        house_count=len(house_structure),
+        plug_count=len(initial_deltas),
+        allocation_time=settings.EVAL_START,
+        effective_after_time=settings.EVAL_START - 1,
+    )
 
     # ── Shutdown coordination ──────────────────────────────────────────────
     shutdown = asyncio.Event()
@@ -426,8 +661,15 @@ async def _main() -> None:
     try:
         await asyncio.gather(
             prediction_loop(predictor, allocator, producer, shutdown, initial_batch_start),
-            variance_consumer_loop(allocator, shutdown),
-            reallocation_loop(allocator, house_structure, producer, shutdown),
+            variance_consumer_loop(allocator, shutdown, last_event_timestamp_by_plug),
+            reallocation_loop(
+                allocator,
+                house_structure,
+                producer,
+                shutdown,
+                initial_allocation_time=settings.EVAL_START,
+                last_event_timestamp_by_plug=last_event_timestamp_by_plug,
+            ),
         )
     finally:
         await producer.flush()

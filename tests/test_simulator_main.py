@@ -333,6 +333,56 @@ def test_build_kafka_message_missing_prediction_priority_over_reactivation():
     assert variance_updates == [(plug_uid, True, None, 100.0)]
 
 
+def test_build_kafka_message_hiereb_threshold_applies_after_allocation_time():
+    house_state = HouseState(house_id=1)
+    plug_uid = make_plug_uid(1, 2, 3)
+    plug = house_state.get_or_create_plug(plug_uid, household_id=2, plug_id=3)
+    plug.set_delta(10.0)
+    plug.update_predictions({1000: 100.0, 1001: 100.0})
+    house_state.stage_hiereb_thresholds(
+        {plug_uid: 100.0},
+        allocation_time=1000,
+        effective_after_time=1000,
+        threshold_version=1,
+    )
+    stats = SimStats()
+
+    payload_at_allocation, updates_at_allocation = build_kafka_message(
+        make_batch(value=150.0),
+        house_state,
+        stats,
+        mode="hiereb",
+    )
+    payload_after_allocation, updates_after_allocation = build_kafka_message(
+        TimestepBatch(
+            house_id=1,
+            timestamp=1001,
+            readings=(
+                PlugReading(
+                    source_id=2,
+                    property=1,
+                    plug_uid=plug_uid,
+                    household_id=2,
+                    plug_id=3,
+                    timestamp=1001,
+                    value=150.0,
+                ),
+            ),
+        ),
+        house_state,
+        stats,
+        mode="hiereb",
+    )
+
+    plug_at_allocation = json.loads(payload_at_allocation)["plugs"][0]
+    plug_after_allocation = json.loads(payload_after_allocation)["plugs"][0]
+
+    assert plug_at_allocation["decision"] == "transmit"
+    assert updates_at_allocation == [(plug_uid, True, 50.0, 10.0)]
+    assert plug_after_allocation["decision"] == "suppress"
+    assert updates_after_allocation == [(plug_uid, False, None, 100.0)]
+
+
 def test_build_kafka_message_can_use_wall_clock_timestamp():
     house_state = HouseState(house_id=1)
     stats = SimStats()

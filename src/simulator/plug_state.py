@@ -188,6 +188,13 @@ class HouseState:
     uniform_pending_delta_per_active: float = 0.0
     uniform_active_count: int = 0
     uniform_delta_per_active: float = 0.0
+    hiereb_allocation_time: int | None = None
+    hiereb_effective_after_time: int | None = None
+    hiereb_threshold_version: int | None = None
+    hiereb_pending_allocation_time: int | None = None
+    hiereb_pending_effective_after_time: int | None = None
+    hiereb_pending_threshold_version: int | None = None
+    hiereb_pending_deltas: Dict[int, float] = field(default_factory=dict)
 
     def get_or_create_plug(
         self, plug_uid: int, household_id: int, plug_id: int
@@ -224,6 +231,84 @@ class HouseState:
                 self.get_or_create_plug(plug_uid, household_id, plug_id).set_delta(delta)
             else:
                 log.warning("unknown_plug_for_delta", plug_uid=plug_uid, house_id=self.house_id)
+
+    def stage_hiereb_thresholds(
+        self,
+        deltas: Dict[int, float],
+        *,
+        allocation_time: int,
+        effective_after_time: int | None = None,
+        threshold_version: int | None = None,
+        create_missing: bool = False,
+    ) -> None:
+        """Stage HierEB thresholds; they apply only after effective_after_time."""
+        if effective_after_time is None:
+            effective_after_time = allocation_time
+
+        staged: Dict[int, float] = {}
+        for plug_uid, delta in deltas.items():
+            if plug_uid in self.plugs:
+                staged[plug_uid] = delta
+            elif create_missing:
+                decoded_house_id = plug_uid // 100_000
+                if decoded_house_id != self.house_id:
+                    log.warning(
+                        "threshold_house_mismatch",
+                        plug_uid=plug_uid,
+                        decoded_house_id=decoded_house_id,
+                        house_id=self.house_id,
+                    )
+                    continue
+
+                remainder = plug_uid % 100_000
+                household_id = remainder // 1_000
+                plug_id = remainder % 1_000
+                self.get_or_create_plug(plug_uid, household_id, plug_id)
+                staged[plug_uid] = delta
+            else:
+                log.warning("unknown_plug_for_threshold", plug_uid=plug_uid, house_id=self.house_id)
+
+        self.hiereb_pending_deltas = staged
+        self.hiereb_pending_allocation_time = allocation_time
+        self.hiereb_pending_effective_after_time = effective_after_time
+        self.hiereb_pending_threshold_version = threshold_version
+        log.debug(
+            "hiereb_thresholds_staged",
+            house_id=self.house_id,
+            plug_count=len(staged),
+            allocation_time=allocation_time,
+            effective_after_time=effective_after_time,
+            threshold_version=threshold_version,
+        )
+
+    def activate_due_hiereb_thresholds(self, timestamp: int) -> bool:
+        """Apply pending HierEB thresholds when timestamp > effective_after_time."""
+        if self.hiereb_pending_effective_after_time is None:
+            return False
+        if timestamp <= self.hiereb_pending_effective_after_time:
+            return False
+
+        for plug_uid, delta in self.hiereb_pending_deltas.items():
+            plug = self.plugs.get(plug_uid)
+            if plug is not None:
+                plug.set_delta(delta)
+
+        self.hiereb_allocation_time = self.hiereb_pending_allocation_time
+        self.hiereb_effective_after_time = self.hiereb_pending_effective_after_time
+        self.hiereb_threshold_version = self.hiereb_pending_threshold_version
+        self.hiereb_pending_allocation_time = None
+        self.hiereb_pending_effective_after_time = None
+        self.hiereb_pending_threshold_version = None
+        self.hiereb_pending_deltas = {}
+        log.debug(
+            "hiereb_thresholds_activated",
+            house_id=self.house_id,
+            timestamp=timestamp,
+            allocation_time=self.hiereb_allocation_time,
+            effective_after_time=self.hiereb_effective_after_time,
+            threshold_version=self.hiereb_threshold_version,
+        )
+        return True
 
     def plug_status_for_event(
         self,

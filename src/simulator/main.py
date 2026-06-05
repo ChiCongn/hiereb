@@ -114,6 +114,8 @@ def build_kafka_message(
             delta_h=uniform_delta_h,
             active_window_seconds=uniform_active_window,
         )
+    elif mode == "hiereb":
+        house_state.activate_due_hiereb_thresholds(batch.timestamp)
 
     for reading in batch.readings:
         plug = house_state.get_or_create_plug(
@@ -370,7 +372,12 @@ async def run_simulator() -> None:
             if variance_updates:
                 for plug_uid, transmitted, residual, delta in variance_updates:
                     await publish_variance_update(
-                        producer, plug_uid, transmitted, residual, delta
+                        producer,
+                        plug_uid,
+                        transmitted,
+                        residual,
+                        delta,
+                        timestamp=batch.timestamp,
                     )
 
             messages_sent += 1
