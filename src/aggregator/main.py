@@ -7,8 +7,9 @@ writes to TimescaleDB.
 Architectural invariants (DO NOT VIOLATE):
   - Aggregator is STATELESS regarding prediction logic.
     Predictions arrive embedded in each Kafka message from the simulator.
-  - Aggregator distinguishes TRANSMITTED (value present) vs SUPPRESSED (value=null).
-    For suppressed plugs, predicted value is used as the actual estimate.
+  - Aggregator computes reconstruction error from actual-vs-reconstructed load.
+    Suppressed events must still carry actual_load from the simulator evaluation
+    path; otherwise house error cannot be measured correctly.
   - The simulator decides stream timestamps. In wall_clock mode, DB rows
     appear near current time while source_timestamp keeps the original DEBS time.
 """
@@ -42,9 +43,14 @@ class PlugSnapshot:
     plug_uid: int
     household_id: int
     plug_id: int
-    value: float | None    # None → suppressed, use predicted
-    predicted: float
+    actual_load: float
+    predicted_load: float | None
+    reconstructed_load: float
     transmitted: bool
+    decision: str = "transmit"
+    reason: str = "normal"
+    plug_status: str = "active"
+    is_forced_transmit: bool = False
 
 
 @dataclass
@@ -66,38 +72,92 @@ class TimestepState:
         """
         Compute house-level metrics from all plug snapshots.
 
-        For suppressed plugs: use predicted as estimate of actual load.
-        This matches the paper's definition of Ê_h(t).
+        E_H(t) = sum(actual_load) - sum(reconstructed_load) over observed
+        plug events in this batch. Suppressed events still contribute their
+        true actual_load because the simulator evaluation path includes it.
         """
         actual_load = 0.0
         pred_load = 0.0
+        reconstructed_load = 0.0
         transmitted_count = 0
 
         for snap in self.snapshots:
-            if snap.transmitted and snap.value is not None:
-                actual_load += snap.value
-                pred_load += snap.predicted
+            actual_load += snap.actual_load
+            reconstructed_load += snap.reconstructed_load
+            if snap.predicted_load is not None:
+                pred_load += snap.predicted_load
+            if snap.transmitted:
                 transmitted_count += 1
-            else:
-                # Suppressed plug: receiver uses prediction as its best estimate
-                actual_load += snap.predicted
-                pred_load += snap.predicted
-                # e_h contribution from this plug = 0 (can't know actual)
 
         plug_count = len(self.snapshots)
         tr = transmitted_count / plug_count if plug_count > 0 else 0.0
-        e_h = actual_load - pred_load  # house-level error
+        e_h = actual_load - reconstructed_load  # house reconstruction error
 
         return HouseMetricRecord(
             timestamp_unix=self.timestamp,
             house_id=self.house_id,
             actual_load=round(actual_load, 4),
             pred_load=round(pred_load, 4),
+            reconstructed_load=round(reconstructed_load, 4),
             e_h=round(e_h, 4),
             tr=round(tr, 6),
             plug_count=plug_count,
             transmitted_count=transmitted_count,
         )
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    return float(value)
+
+
+def _required_float(value: Any, field_name: str) -> float:
+    if value is None:
+        raise ValueError(f"{field_name} is required for reconstruction metrics")
+    return float(value)
+
+
+def _snapshot_from_message(plug_data: dict[str, Any]) -> PlugSnapshot:
+    """Build a PlugSnapshot from simulator message data."""
+    transmitted = bool(plug_data["transmitted"])
+    actual_raw = plug_data.get("actual_load")
+    if actual_raw is None:
+        # Backward-compatible only for transmitted legacy messages, where
+        # `value` was the actual reading. Suppressed legacy messages cannot
+        # produce correct reconstruction error and must not be silently imputed.
+        if transmitted:
+            actual_raw = plug_data.get("value")
+        else:
+            raise ValueError("actual_load is required for suppressed events")
+
+    predicted = _optional_float(
+        plug_data.get("predicted_load", plug_data.get("predicted"))
+    )
+    reconstructed_raw = plug_data.get("reconstructed_load")
+    if reconstructed_raw is None:
+        if transmitted:
+            reconstructed_raw = actual_raw
+        elif predicted is not None:
+            reconstructed_raw = predicted
+        else:
+            raise ValueError(
+                "reconstructed_load is required when suppressed prediction is missing"
+            )
+
+    return PlugSnapshot(
+        plug_uid=plug_data["plug_uid"],
+        household_id=plug_data["household_id"],
+        plug_id=plug_data["plug_id"],
+        actual_load=_required_float(actual_raw, "actual_load"),
+        predicted_load=predicted,
+        reconstructed_load=_required_float(reconstructed_raw, "reconstructed_load"),
+        transmitted=transmitted,
+        decision=plug_data.get("decision", "transmit" if transmitted else "suppress"),
+        reason=plug_data.get("reason", "normal"),
+        plug_status=plug_data.get("plug_status", "active"),
+        is_forced_transmit=bool(plug_data.get("is_forced_transmit", False)),
+    )
 
 
 # ─── Aggregator ───────────────────────────────────────────────────────────────
@@ -191,15 +251,18 @@ class HouseAggregator:
 
         state = self._pending[key]
 
-        for plug_data in data.get("plugs", []):
-            state.add_plug(PlugSnapshot(
-                plug_uid=plug_data["plug_uid"],
-                household_id=plug_data["household_id"],
-                plug_id=plug_data["plug_id"],
-                value=plug_data.get("value"),        # None if suppressed
-                predicted=plug_data.get("predicted", 0.0),
-                transmitted=plug_data["transmitted"],
-            ))
+        try:
+            snapshots = [
+                _snapshot_from_message(plug_data)
+                for plug_data in data.get("plugs", [])
+            ]
+        except ValueError as exc:
+            log.warning("invalid_metric_message_skipped", error=str(exc))
+            del self._pending[key]
+            return
+
+        for snapshot in snapshots:
+            state.add_plug(snapshot)
 
         # One message = one complete timestep for a house (simulator guarantee).
         # The writer batches records and flushes by DB_WRITE_BATCH_SIZE/periodic flush.

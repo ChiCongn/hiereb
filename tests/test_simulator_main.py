@@ -53,6 +53,13 @@ def test_build_kafka_message_full_tx_includes_plug_metadata():
     assert plug["household_id"] == 2
     assert plug["plug_id"] == 3
     assert plug["value"] == pytest.approx(105.0)
+    assert plug["actual_load"] == pytest.approx(105.0)
+    assert plug["predicted_load"] is None
+    assert plug["reconstructed_load"] == pytest.approx(105.0)
+    assert plug["decision"] == "transmit"
+    assert plug["reason"] == "normal"
+    assert plug["plug_status"] == "active"
+    assert plug["is_forced_transmit"] is False
     assert plug["transmitted"] is True
     assert stats.overall_tr == pytest.approx(1.0)
 
@@ -76,7 +83,15 @@ def test_build_kafka_message_uniform_suppresses_within_delta():
     plug_msg = data["plugs"][0]
 
     assert plug_msg["value"] is None
+    assert plug_msg["actual_load"] == pytest.approx(105.0)
     assert plug_msg["predicted"] == pytest.approx(100.0)
+    assert plug_msg["predicted_load"] == pytest.approx(100.0)
+    assert plug_msg["reconstructed_load"] == pytest.approx(100.0)
+    assert plug_msg["residual"] == pytest.approx(5.0)
+    assert plug_msg["decision"] == "suppress"
+    assert plug_msg["reason"] == "normal"
+    assert plug_msg["plug_status"] == "active"
+    assert plug_msg["is_forced_transmit"] is False
     assert plug_msg["transmitted"] is False
     assert variance_updates == [(plug_uid, False, None, 10.0)]
     assert stats.overall_tr == pytest.approx(0.0)
@@ -101,11 +116,15 @@ def test_build_kafka_message_missing_prediction_forces_transmit():
     plug_msg = data["plugs"][0]
 
     assert plug_msg["value"] == pytest.approx(105.0)
+    assert plug_msg["actual_load"] == pytest.approx(105.0)
     assert plug_msg["predicted"] is None
     assert plug_msg["predicted_load"] is None
+    assert plug_msg["reconstructed_load"] == pytest.approx(105.0)
     assert plug_msg["residual"] is None
     assert plug_msg["abs_residual"] is None
+    assert plug_msg["decision"] == "transmit"
     assert plug_msg["reason"] == "missing_prediction"
+    assert plug_msg["plug_status"] == "active"
     assert plug_msg["is_forced_transmit"] is True
     assert plug_msg["transmitted"] is True
     assert variance_updates == [(plug_uid, True, None, 10.0)]

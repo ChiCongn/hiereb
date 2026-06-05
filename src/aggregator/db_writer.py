@@ -28,9 +28,10 @@ class HouseMetricRecord:
     """One row to insert into house_metrics."""
     timestamp_unix: float     # stream-time unix seconds
     house_id: int
-    actual_load: float        # Watts – transmitted + predicted-for-suppressed
-    pred_load: float          # Watts – sum of predicted values
-    e_h: float                # house-level error: actual_load - pred_load
+    actual_load: float        # Watts - sum of actual observed event values
+    pred_load: float          # Watts - sum of available predicted values
+    reconstructed_load: float # Watts - server-side reconstructed house load
+    e_h: float                # house-level error: actual_load - reconstructed_load
     tr: float                 # transmission rate [0.0, 1.0]
     plug_count: int           # total plugs observed this timestep
     transmitted_count: int    # plugs that transmitted
@@ -38,8 +39,8 @@ class HouseMetricRecord:
 
 _INSERT_SQL = """
     INSERT INTO house_metrics
-        (run_id, time, house_id, actual_load, pred_load, e_h, tr, plug_count, transmitted_count)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        (run_id, time, house_id, actual_load, pred_load, reconstructed_load, e_h, tr, plug_count, transmitted_count)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
     ON CONFLICT DO NOTHING
 """
 
@@ -101,6 +102,7 @@ class TimescaleWriter:
                 r.house_id,
                 r.actual_load,
                 r.pred_load,
+                r.reconstructed_load,
                 r.e_h,
                 r.tr,
                 r.plug_count,

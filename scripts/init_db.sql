@@ -12,9 +12,10 @@ CREATE TABLE IF NOT EXISTS house_metrics (
     run_id            TEXT        NOT NULL DEFAULT 'default',
     time              TIMESTAMPTZ  NOT NULL,
     house_id          SMALLINT     NOT NULL,
-    actual_load       REAL,          -- total house load (W); suppressed plugs use predicted
-    pred_load         REAL,          -- sum of predicted values (W)
-    e_h               REAL,          -- house error: actual_load - pred_load
+    actual_load       REAL,          -- total observed house load (W)
+    pred_load         REAL,          -- sum of available predicted values (W)
+    reconstructed_load REAL,         -- server-side reconstructed house load (W)
+    e_h               REAL,          -- house error: actual_load - reconstructed_load
     tr                REAL,          -- transmission rate [0, 1]
     plug_count        SMALLINT,      -- total plugs seen this timestep
     transmitted_count SMALLINT       -- plugs that actually transmitted
@@ -22,6 +23,9 @@ CREATE TABLE IF NOT EXISTS house_metrics (
 
 ALTER TABLE IF EXISTS house_metrics
     ADD COLUMN IF NOT EXISTS run_id TEXT NOT NULL DEFAULT 'default';
+
+ALTER TABLE IF EXISTS house_metrics
+    ADD COLUMN IF NOT EXISTS reconstructed_load REAL;
 
 SELECT create_hypertable('house_metrics', 'time', if_not_exists => TRUE);
 SELECT set_chunk_time_interval('house_metrics', INTERVAL '1 hour');

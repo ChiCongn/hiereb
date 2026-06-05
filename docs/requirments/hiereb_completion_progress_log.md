@@ -35,7 +35,7 @@ Quy tắc cập nhật:
 | P00 | `done` | Prompt 00 | Baseline snapshot và test hiện tại | `2026-06-05T20:34:03+07:00`; pytest `111 passed in 0.84s` |
 | P01 | `done` | Prompt 01 | Data contract: `property=1`, window, invalid, duplicate, sort | `2026-06-05T20:44:48+07:00`; related tests `50 passed`; full pytest `118 passed` |
 | P02 | `done` | Prompt 02 | Predictor và missing prediction forced transmit | `2026-06-05T21:11:37+07:00`; related tests `42 passed`; full pytest `121 passed` |
-| P03 | `todo` | Prompt 03 | Event decisions và reconstruction metric | Chưa có |
+| P03 | `done` | Prompt 03 | Event decisions và reconstruction metric | `2026-06-05T21:19:59+07:00`; aggregator/simulator tests `17 passed`; full pytest `124 passed` |
 | P04A | `todo` | Prompt 04 | Uniform active-budget baseline | Chưa có |
 | P04B | `todo` | Prompt 05 | HierEB allocator budget/timing/sigma_floor | Chưa có |
 | P05 | `todo` | Prompt 06 | Sáu CSV output đúng schema | Chưa có |
@@ -59,8 +59,8 @@ Trạng thái tài liệu điều phối:
 | P0-01 | P0 | `done` | P01 | Default experiment dùng `property=1`; docs không còn nói `property=0` là load | `rg -n "property.*0.*load\|PROPERTY_FILTER=0\|--property 0" config .env.example README.md scripts src tests` | Dùng cho DEBS load |
 | P0-02 | P0 | `done` | P01 | Warm-up/evaluation window tuyệt đối, không overlap | `pytest tests/test_loader.py -q` | Cần deterministic |
 | P0-03 | P0 | `done` | P02 | Missing prediction luôn forced transmit | `pytest tests/test_predictor.py tests/test_plug_state.py -q` | Không dùng last value làm fallback metric |
-| P0-04 | P0 | `todo` | P03 | Metric chính là `actual_load` vs `reconstructed_load` | `pytest tests/test_aggregator.py tests/test_simulator_main.py -q` | Không dùng residual predictor làm house RMSE |
-| P0-05 | P0 | `todo` | P03 | `full_tx` có reconstruction error bằng 0 | `pytest tests/test_aggregator.py -q` | Predictor error có thể ghi riêng |
+| P0-04 | P0 | `done` | P03 | Metric chính là `actual_load` vs `reconstructed_load` | `pytest tests/test_aggregator.py tests/test_simulator_main.py -q` | Không dùng residual predictor làm house RMSE |
+| P0-05 | P0 | `done` | P03 | `full_tx` có reconstruction error bằng 0 | `pytest tests/test_aggregator.py -q` | Predictor error có thể ghi riêng |
 | P0-06 | P0 | `todo` | P04A | Uniform dùng active-budget: `delta_p = Delta_H / N_budget_active` | `pytest tests/test_plug_state.py tests/test_simulator_main.py -q` | Cần metadata active plug |
 | P0-07 | P0 | `todo` | P04B | HierEB allocator bảo toàn budget, không inflate do `delta_min` | `pytest tests/test_allocator.py -q` | Có assertion tổng threshold |
 | P1-01 | P1 | `done` | P01 | Invalid value, duplicate và sort stable được xử lý | `pytest tests/test_loader.py tests/test_partition_debs_by_house.py -q` | Duplicate giữ `id` lớn nhất |
@@ -139,14 +139,22 @@ Baseline phải được ghi sau khi chạy Prompt 00.
 
 ### P03 - Event decisions và reconstruction metric
 
-- Trạng thái: `todo`
-- File dự kiến: `src/simulator/main.py`, `src/aggregator/main.py`,
+- Trạng thái: `done`
+- File đã sửa: `src/simulator/main.py`, `src/aggregator/main.py`,
   `src/aggregator/db_writer.py`, `scripts/init_db.sql`,
   `tests/test_aggregator.py`, `tests/test_simulator_main.py`
-- Test đã chạy: chưa có
-- Kết quả: chưa có
+- Test đã chạy:
+  - `python3 -m compileall src/aggregator src/simulator tests`
+  - `.venv/bin/python -m pytest tests/test_aggregator.py tests/test_simulator_main.py -q`
+  - `.venv/bin/python -m pytest -q`
+  - `rg -n "all_suppressed_e_h_is_zero|suppressed.*predicted.*actual|e_h contribution.*0|can't know actual|predicted-for-suppressed|actual estimate|suppressed plugs use predicted" src tests scripts`
+- Kết quả:
+  - Compile: pass
+  - Aggregator/simulator tests: `17 passed in 0.31s`
+  - Full suite: `124 passed in 0.75s`
+  - `rg` verification: không còn match cho logic cũ `all suppressed e_h = 0` hoặc suppressed dùng prediction làm actual
 - Blocker: không có
-- Next step: chờ P02 done
+- Next step: chạy Prompt 04 để sửa uniform active-budget baseline
 
 ### P04A - Uniform active-budget baseline
 
@@ -374,6 +382,40 @@ Baseline phải được ghi sau khi chạy Prompt 00.
   - Không có.
 - Next step:
   - Chạy Prompt 03 để sửa event decisions và reconstruction metric.
+
+### 2026-06-05T21:19:59+07:00 - Phase P03: Event decisions và reconstruction metric
+
+- Trạng thái: `done`
+- File đã sửa:
+  - `src/simulator/main.py`
+  - `src/aggregator/main.py`
+  - `src/aggregator/db_writer.py`
+  - `scripts/init_db.sql`
+  - `tests/test_aggregator.py`
+  - `tests/test_simulator_main.py`
+  - `docs/requirments/hiereb_completion_progress_log.md`
+- Lệnh đã chạy:
+  - `python3 -m compileall src/aggregator src/simulator tests`
+  - `.venv/bin/python -m pytest tests/test_aggregator.py tests/test_simulator_main.py -q`
+  - `.venv/bin/python -m pytest -q`
+  - `rg -n "all_suppressed_e_h_is_zero|suppressed.*predicted.*actual|e_h contribution.*0|can't know actual|predicted-for-suppressed|actual estimate|suppressed plugs use predicted" src tests scripts`
+- Kết quả:
+  - Compile: pass.
+  - Aggregator/simulator tests: `17 passed in 0.31s`.
+  - Full suite: `124 passed in 0.75s`.
+  - `rg` verification: không có output cho các pattern logic cũ.
+- Acceptance evidence:
+  - Simulator message giữ đủ `actual_load`, nullable `predicted_load`, `reconstructed_load`, `transmitted`, `decision`, `reason`, `plug_status`, `is_forced_transmit`.
+  - Khi suppress: `reconstructed_load = predicted_load`.
+  - Khi transmit: `reconstructed_load = actual_load`.
+  - Aggregator tính `E_H(t) = sum(actual_load) - sum(reconstructed_load)` trên plug có observed event trong batch.
+  - `full_tx` reconstruction error bằng `0` trong test.
+  - Test `all suppressed` với actual khác prediction cho `e_h != 0`; không còn test khẳng định `all_suppressed_e_h_is_zero`.
+  - DB schema/record có thêm `reconstructed_load` để lưu reconstruction series.
+- Blocker:
+  - Không có.
+- Next step:
+  - Chạy Prompt 04 để sửa uniform active-budget baseline.
 
 ## 7. Mẫu log cho các lần cập nhật sau
 

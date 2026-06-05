@@ -14,10 +14,14 @@ Message format (1 message per house per timestamp):
             "plug_id":      int,
             "household_id": int,
             "value":        float | null, # null when suppressed
+            "actual_load":  float,
             "predicted":    float | null,
             "predicted_load": float | null,
+            "reconstructed_load": float,
             "residual":     float | null,
+            "decision":     str,
             "reason":       str,
+            "plug_status":  str,
             "is_forced_transmit": bool,
             "transmitted":  bool
         },
@@ -118,16 +122,28 @@ def build_kafka_message(
                 (reading.plug_uid, decision.transmitted, variance_residual, plug.delta)
             )
 
+        reconstructed_load = (
+            reading.value if decision.transmitted else decision.predicted
+        )
+        if reconstructed_load is None:
+            # Missing prediction is always forced transmit, so this should only
+            # be reachable if future decision logic violates that contract.
+            reconstructed_load = reading.value
+
         plug_messages.append({
             "plug_uid": reading.plug_uid,
             "plug_id": reading.plug_id,
             "household_id": reading.household_id,
             "value": reading.value if decision.transmitted else None,
+            "actual_load": reading.value,
             "predicted": decision.predicted,
             "predicted_load": decision.predicted,
+            "reconstructed_load": reconstructed_load,
             "residual": decision.residual,
             "abs_residual": decision.abs_residual,
+            "decision": "transmit" if decision.transmitted else "suppress",
             "reason": decision.reason,
+            "plug_status": "active",
             "is_forced_transmit": decision.is_forced_transmit,
             "transmitted": decision.transmitted,
         })
