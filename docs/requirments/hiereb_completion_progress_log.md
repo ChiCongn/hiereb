@@ -36,7 +36,7 @@ Quy tắc cập nhật:
 | P01 | `done` | Prompt 01 | Data contract: `property=1`, window, invalid, duplicate, sort | `2026-06-05T20:44:48+07:00`; related tests `50 passed`; full pytest `118 passed` |
 | P02 | `done` | Prompt 02 | Predictor và missing prediction forced transmit | `2026-06-05T21:11:37+07:00`; related tests `42 passed`; full pytest `121 passed` |
 | P03 | `done` | Prompt 03 | Event decisions và reconstruction metric | `2026-06-05T21:19:59+07:00`; aggregator/simulator tests `17 passed`; full pytest `124 passed` |
-| P04A | `todo` | Prompt 04 | Uniform active-budget baseline | Chưa có |
+| P04A | `done` | Prompt 04 | Uniform active-budget baseline | `2026-06-05T21:31:39+07:00`; related tests `32 passed`; full pytest `132 passed` |
 | P04B | `todo` | Prompt 05 | HierEB allocator budget/timing/sigma_floor | Chưa có |
 | P05 | `todo` | Prompt 06 | Sáu CSV output đúng schema | Chưa có |
 | P06 | `todo` | Prompt 07 | Rolling metrics và summary metrics | Chưa có |
@@ -61,7 +61,7 @@ Trạng thái tài liệu điều phối:
 | P0-03 | P0 | `done` | P02 | Missing prediction luôn forced transmit | `pytest tests/test_predictor.py tests/test_plug_state.py -q` | Không dùng last value làm fallback metric |
 | P0-04 | P0 | `done` | P03 | Metric chính là `actual_load` vs `reconstructed_load` | `pytest tests/test_aggregator.py tests/test_simulator_main.py -q` | Không dùng residual predictor làm house RMSE |
 | P0-05 | P0 | `done` | P03 | `full_tx` có reconstruction error bằng 0 | `pytest tests/test_aggregator.py -q` | Predictor error có thể ghi riêng |
-| P0-06 | P0 | `todo` | P04A | Uniform dùng active-budget: `delta_p = Delta_H / N_budget_active` | `pytest tests/test_plug_state.py tests/test_simulator_main.py -q` | Cần metadata active plug |
+| P0-06 | P0 | `done` | P04A | Uniform dùng active-budget: `delta_p = Delta_H / N_budget_active` | `pytest tests/test_plug_state.py tests/test_simulator_main.py -q` | Có metadata active plug trong `HouseState` |
 | P0-07 | P0 | `todo` | P04B | HierEB allocator bảo toàn budget, không inflate do `delta_min` | `pytest tests/test_allocator.py -q` | Có assertion tổng threshold |
 | P1-01 | P1 | `done` | P01 | Invalid value, duplicate và sort stable được xử lý | `pytest tests/test_loader.py tests/test_partition_debs_by_house.py -q` | Duplicate giữ `id` lớn nhất |
 | P1-02 | P1 | `todo` | P04B | `sigma_floor` cố định từ warm-up toàn house | `pytest tests/test_allocator.py -q` | Không dùng percentile runtime |
@@ -158,13 +158,30 @@ Baseline phải được ghi sau khi chạy Prompt 00.
 
 ### P04A - Uniform active-budget baseline
 
-- Trạng thái: `todo`
-- File dự kiến: `src/simulator/plug_state.py`, `src/simulator/main.py`,
-  `config/settings.py`, `tests/test_plug_state.py`, `tests/test_simulator_main.py`
-- Test đã chạy: chưa có
-- Kết quả: chưa có
+- Trạng thái: `done`
+- File đã sửa: `config/settings.py`, `.env.example`,
+  `src/simulator/plug_state.py`, `src/simulator/main.py`,
+  `tests/test_plug_state.py`, `tests/test_simulator_main.py`
+- Test đã chạy:
+  - `python3 -m compileall config src/simulator tests`
+  - `.venv/bin/python -m pytest tests/test_plug_state.py tests/test_simulator_main.py tests/test_ml_main.py -q`
+  - `.venv/bin/python -m pytest -q`
+  - `rg -n "settings\\.UNIFORM_DELTA|fixed UNIFORM_DELTA|uniform = fixed|fixed threshold suppression|for 'uniform' mode" config .env.example README.md src tests`
+- Kết quả:
+  - Compile: pass.
+  - Plug state/simulator/ML helper tests: `32 passed in 0.32s`.
+  - Full suite: `132 passed in 0.75s`.
+  - `rg` verification: không có output, tức baseline uniform không còn đọc `settings.UNIFORM_DELTA` hoặc mô tả là fixed threshold.
+- Acceptance evidence:
+  - Uniform baseline dùng `delta_p = Delta_H / N_budget_active_plugs_H(t)`.
+  - `ACTIVE_WINDOW_SECONDS=3600` được thêm vào settings và `.env.example`.
+  - Plug ngoài active window nhận `delta_p = 0` ở allocation kế tiếp.
+  - Plug inactive reappear forced transmit với `plug_status=reactivated`, `reason=inactive_reactivation`.
+  - Missing prediction ưu tiên hơn reactivation: `reason=missing_prediction`, `predicted_load=null`, `residual=null`.
+  - Uniform allocation được stage tại `allocation_time` và chỉ activate khi `timestamp > allocation_time`.
+  - `UNIFORM_DELTA` chỉ còn là cấu hình legacy/debug, không dùng trong baseline uniform decision.
 - Blocker: không có
-- Next step: chờ P03 done
+- Next step: chạy Prompt 05 để sửa HierEB allocator budget/timing/sigma_floor
 
 ### P04B - HierEB allocator
 
@@ -416,6 +433,39 @@ Baseline phải được ghi sau khi chạy Prompt 00.
   - Không có.
 - Next step:
   - Chạy Prompt 04 để sửa uniform active-budget baseline.
+
+### 2026-06-05T21:31:39+07:00 - Phase P04A: Uniform active-budget baseline
+
+- Trạng thái: `done`
+- File đã sửa:
+  - `config/settings.py`
+  - `.env.example`
+  - `src/simulator/plug_state.py`
+  - `src/simulator/main.py`
+  - `tests/test_plug_state.py`
+  - `tests/test_simulator_main.py`
+  - `docs/requirments/hiereb_completion_progress_log.md`
+- Lệnh đã chạy:
+  - `python3 -m compileall config src/simulator tests`
+  - `.venv/bin/python -m pytest tests/test_plug_state.py tests/test_simulator_main.py tests/test_ml_main.py -q`
+  - `.venv/bin/python -m pytest -q`
+  - `rg -n "settings\\.UNIFORM_DELTA|fixed UNIFORM_DELTA|uniform = fixed|fixed threshold suppression|for 'uniform' mode" config .env.example README.md src tests`
+- Kết quả:
+  - Compile: pass.
+  - Plug state/simulator/ML helper tests: `32 passed in 0.32s`.
+  - Full suite: `132 passed in 0.75s`.
+  - `rg` verification: không có output cho fixed `UNIFORM_DELTA` trong baseline path.
+- Acceptance evidence:
+  - `uniform` không còn dùng fixed `settings.UNIFORM_DELTA` trong `build_kafka_message`.
+  - Uniform per-plug threshold được tính từ `Delta_H / N_budget_active_plugs_H(t)`.
+  - Active window dùng event-time `3600` giây.
+  - Inactive plug nhận delta `0` ở allocation kế tiếp; reappear forced transmit.
+  - Missing prediction giữ ưu tiên cao hơn inactive reactivation.
+  - Allocation mới chỉ activate cho event có `timestamp > allocation_time`.
+- Blocker:
+  - Không có.
+- Next step:
+  - Chạy Prompt 05 để sửa HierEB allocator budget/timing/sigma_floor.
 
 ## 7. Mẫu log cho các lần cập nhật sau
 

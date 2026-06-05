@@ -85,6 +85,45 @@ def test_decision_records_residual_for_known_prediction():
     assert decision.is_forced_transmit is False
 
 
+def test_reactivated_plug_forces_transmit_with_known_prediction():
+    plug = make_plug()
+    plug.observe(100.0, 1000)
+    plug.set_delta(100.0)
+    plug.update_predictions({5000: 100.0})
+
+    decision = plug.decide_transmission(
+        actual=100.0,
+        timestamp=5000,
+        plug_status="reactivated",
+    )
+
+    assert decision.transmitted is True
+    assert decision.predicted == pytest.approx(100.0)
+    assert decision.residual == pytest.approx(0.0)
+    assert decision.reason == "inactive_reactivation"
+    assert decision.plug_status == "reactivated"
+    assert decision.is_forced_transmit is True
+
+
+def test_missing_prediction_priority_over_reactivation_reason():
+    plug = make_plug()
+    plug.observe(100.0, 1000)
+    plug.set_delta(100.0)
+
+    decision = plug.decide_transmission(
+        actual=100.0,
+        timestamp=5000,
+        plug_status="reactivated",
+    )
+
+    assert decision.transmitted is True
+    assert decision.predicted is None
+    assert decision.residual is None
+    assert decision.reason == "missing_prediction"
+    assert decision.plug_status == "reactivated"
+    assert decision.is_forced_transmit is True
+
+
 def test_update_predictions_merges_batches():
     plug = make_plug()
     plug.update_predictions({1000: 50.0, 1001: 55.0})
@@ -152,3 +191,38 @@ def test_house_update_deltas_ignores_unknown_plug():
     # Should not raise error
     house.update_deltas({101: 8.0, 9999: 20.0})
     assert house.plugs[101].delta == 8.0
+
+
+def test_uniform_allocation_divides_house_budget_by_active_plugs():
+    house = HouseState(house_id=0)
+    p1 = house.get_or_create_plug(101, 0, 1)
+    p2 = house.get_or_create_plug(102, 0, 2)
+    p3 = house.get_or_create_plug(103, 0, 3)
+    p1.observe(10.0, 5000)
+    p2.observe(20.0, 4900)
+    p3.observe(30.0, 0)
+
+    active_count, delta = house.stage_uniform_allocation(
+        delta_h=120.0,
+        allocation_time=5000,
+        active_window_seconds=3600,
+    )
+    activated = house.activate_due_uniform_allocation(5001)
+
+    assert active_count == 2
+    assert delta == pytest.approx(60.0)
+    assert activated is True
+    assert p1.delta == pytest.approx(60.0)
+    assert p2.delta == pytest.approx(60.0)
+    assert p3.delta == pytest.approx(0.0)
+    assert house.uniform_active_count == 2
+    assert house.uniform_delta_per_active == pytest.approx(60.0)
+
+
+def test_plug_status_for_event_marks_inactive_reappearance():
+    house = HouseState(house_id=0)
+    plug = house.get_or_create_plug(101, 0, 1)
+    plug.observe(10.0, 1000)
+
+    assert house.plug_status_for_event(plug, 4000, 3600) == "active"
+    assert house.plug_status_for_event(plug, 5000, 3600) == "reactivated"

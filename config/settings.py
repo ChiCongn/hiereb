@@ -46,14 +46,17 @@ class Settings(BaseSettings):
     # wall_clock: write simulated stream timestamps near current time.
     # source: keep original DEBS unix timestamps.
     STREAM_TIME_MODE: str = Field(default="wall_clock")
-    # full_tx  : always transmit (Week 1 baseline)
-    # uniform  : suppress with fixed UNIFORM_DELTA
-    # hiereb   : full HierEB water-filling (Week 2+)
+    # full_tx  : always transmit (no-suppression baseline)
+    # uniform  : active-budget baseline, delta_p = Delta_H / active_plug_count
+    # hiereb   : full HierEB water-filling
 
     # ── HierEB Algorithm ──────────────────────────────────────────────────────
     EPSILON_H: float = Field(default=0.05)         # <1 = ratio of mean load; >=1 = Watts
     TAU: int = Field(default=300)                  # reallocation interval (seconds of data-time)
-    UNIFORM_DELTA: float = Field(default=10.0)     # Watts, for 'uniform' mode
+    ACTIVE_WINDOW_SECONDS: int = Field(default=3600)  # event-time seconds for active plug budget
+    # Legacy/debug only. Baseline uniform mode derives per-plug delta from
+    # EPSILON_H/Delta_H divided by active plugs; it must not read this value.
+    UNIFORM_DELTA: float = Field(default=10.0)
     RUN_ID: str = Field(default="default")         # experiment/run namespace for DB rows
     TRAINING_DAYS: int = Field(default=7)          # <=0 means use all loaded data
     # Prediction granularity for time-slice median. 300 = 5-minute bins.

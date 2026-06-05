@@ -33,6 +33,28 @@ def make_batch(value: float = 105.0) -> TimestepBatch:
     )
 
 
+def make_multi_batch(timestamp: int, values: dict[tuple[int, int], float]) -> TimestepBatch:
+    return TimestepBatch(
+        house_id=1,
+        timestamp=timestamp,
+        readings=tuple(
+            PlugReading(
+                source_id=index,
+                property=1,
+                plug_uid=make_plug_uid(1, household_id, plug_id),
+                household_id=household_id,
+                plug_id=plug_id,
+                timestamp=timestamp,
+                value=value,
+            )
+            for index, ((household_id, plug_id), value) in enumerate(
+                values.items(),
+                start=1,
+            )
+        ),
+    )
+
+
 def test_build_kafka_message_full_tx_includes_plug_metadata():
     house_state = HouseState(house_id=1)
     stats = SimStats()
@@ -97,6 +119,89 @@ def test_build_kafka_message_uniform_suppresses_within_delta():
     assert stats.overall_tr == pytest.approx(0.0)
 
 
+def test_build_kafka_message_uniform_delta_uses_house_budget_active_count():
+    house_state = HouseState(house_id=1)
+    p1 = house_state.get_or_create_plug(make_plug_uid(1, 2, 1), 2, 1)
+    p2 = house_state.get_or_create_plug(make_plug_uid(1, 2, 2), 2, 2)
+    p1.update_predictions({1000: 100.0})
+    p2.update_predictions({1000: 100.0})
+    stats = SimStats()
+
+    payload, variance_updates = build_kafka_message(
+        make_multi_batch(1000, {(2, 1): 140.0, (2, 2): 130.0}),
+        house_state,
+        stats,
+        mode="uniform",
+        uniform_delta=100.0,
+    )
+
+    data = json.loads(payload)
+
+    assert house_state.uniform_active_count == 2
+    assert house_state.uniform_delta_per_active == pytest.approx(50.0)
+    assert p1.delta == pytest.approx(50.0)
+    assert p2.delta == pytest.approx(50.0)
+    assert [plug["decision"] for plug in data["plugs"]] == ["suppress", "suppress"]
+    assert variance_updates == [
+        (p1.plug_uid, False, None, 50.0),
+        (p2.plug_uid, False, None, 50.0),
+    ]
+
+
+def test_build_kafka_message_uniform_active_count_changes_at_next_allocation():
+    house_state = HouseState(house_id=1)
+    p1 = house_state.get_or_create_plug(make_plug_uid(1, 2, 1), 2, 1)
+    p2 = house_state.get_or_create_plug(make_plug_uid(1, 2, 2), 2, 2)
+    p1.update_predictions({1000: 100.0})
+    p2.update_predictions({1000: 100.0})
+    stats = SimStats()
+
+    build_kafka_message(
+        make_multi_batch(1000, {(2, 1): 140.0, (2, 2): 130.0}),
+        house_state,
+        stats,
+        mode="uniform",
+        uniform_delta=100.0,
+        uniform_allocation_period_seconds=1,
+    )
+    p1.update_predictions({4000: 100.0, 4601: 100.0, 4602: 100.0})
+    build_kafka_message(
+        make_multi_batch(4000, {(2, 1): 140.0}),
+        house_state,
+        stats,
+        mode="uniform",
+        uniform_delta=100.0,
+        uniform_allocation_period_seconds=1,
+    )
+    build_kafka_message(
+        make_multi_batch(4601, {(2, 1): 140.0}),
+        house_state,
+        stats,
+        mode="uniform",
+        uniform_delta=100.0,
+        uniform_allocation_period_seconds=1,
+    )
+    payload, variance_updates = build_kafka_message(
+        make_multi_batch(4602, {(2, 1): 180.0}),
+        house_state,
+        stats,
+        mode="uniform",
+        uniform_delta=100.0,
+        uniform_allocation_period_seconds=1,
+    )
+
+    data = json.loads(payload)
+    plug_msg = data["plugs"][0]
+
+    assert house_state.uniform_active_count == 1
+    assert house_state.uniform_delta_per_active == pytest.approx(100.0)
+    assert p1.delta == pytest.approx(100.0)
+    assert p2.delta == pytest.approx(0.0)
+    assert plug_msg["decision"] == "suppress"
+    assert plug_msg["residual"] == pytest.approx(80.0)
+    assert variance_updates == [(p1.plug_uid, False, None, 100.0)]
+
+
 def test_build_kafka_message_missing_prediction_forces_transmit():
     house_state = HouseState(house_id=1)
     plug_uid = make_plug_uid(1, 2, 3)
@@ -129,6 +234,103 @@ def test_build_kafka_message_missing_prediction_forces_transmit():
     assert plug_msg["transmitted"] is True
     assert variance_updates == [(plug_uid, True, None, 10.0)]
     assert stats.overall_tr == pytest.approx(1.0)
+
+
+def test_build_kafka_message_inactive_reactivation_forces_transmit():
+    house_state = HouseState(house_id=1)
+    plug_uid = make_plug_uid(1, 2, 3)
+    plug = house_state.get_or_create_plug(plug_uid, household_id=2, plug_id=3)
+    plug.update_predictions({1000: 100.0})
+    stats = SimStats()
+
+    build_kafka_message(
+        make_batch(value=100.0),
+        house_state,
+        stats,
+        mode="uniform",
+        uniform_delta=100.0,
+    )
+    plug.update_predictions({4601: 100.0})
+    payload, variance_updates = build_kafka_message(
+        TimestepBatch(
+            house_id=1,
+            timestamp=4601,
+            readings=(
+                PlugReading(
+                    source_id=2,
+                    property=1,
+                    plug_uid=plug_uid,
+                    household_id=2,
+                    plug_id=3,
+                    timestamp=4601,
+                    value=100.0,
+                ),
+            ),
+        ),
+        house_state,
+        stats,
+        mode="uniform",
+        uniform_delta=100.0,
+    )
+
+    data = json.loads(payload)
+    plug_msg = data["plugs"][0]
+
+    assert plug_msg["value"] == pytest.approx(100.0)
+    assert plug_msg["decision"] == "transmit"
+    assert plug_msg["reason"] == "inactive_reactivation"
+    assert plug_msg["plug_status"] == "reactivated"
+    assert plug_msg["is_forced_transmit"] is True
+    assert variance_updates == [(plug_uid, True, 0.0, 100.0)]
+
+
+def test_build_kafka_message_missing_prediction_priority_over_reactivation():
+    house_state = HouseState(house_id=1)
+    plug_uid = make_plug_uid(1, 2, 3)
+    plug = house_state.get_or_create_plug(plug_uid, household_id=2, plug_id=3)
+    plug.update_predictions({1000: 100.0})
+    stats = SimStats()
+
+    build_kafka_message(
+        make_batch(value=100.0),
+        house_state,
+        stats,
+        mode="uniform",
+        uniform_delta=100.0,
+    )
+    payload, variance_updates = build_kafka_message(
+        TimestepBatch(
+            house_id=1,
+            timestamp=4601,
+            readings=(
+                PlugReading(
+                    source_id=2,
+                    property=1,
+                    plug_uid=plug_uid,
+                    household_id=2,
+                    plug_id=3,
+                    timestamp=4601,
+                    value=100.0,
+                ),
+            ),
+        ),
+        house_state,
+        stats,
+        mode="uniform",
+        uniform_delta=100.0,
+    )
+
+    data = json.loads(payload)
+    plug_msg = data["plugs"][0]
+
+    assert plug_msg["value"] == pytest.approx(100.0)
+    assert plug_msg["predicted_load"] is None
+    assert plug_msg["residual"] is None
+    assert plug_msg["decision"] == "transmit"
+    assert plug_msg["reason"] == "missing_prediction"
+    assert plug_msg["plug_status"] == "reactivated"
+    assert plug_msg["is_forced_transmit"] is True
+    assert variance_updates == [(plug_uid, True, None, 100.0)]
 
 
 def test_build_kafka_message_can_use_wall_clock_timestamp():

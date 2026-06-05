@@ -29,8 +29,8 @@ Message format (1 message per house per timestamp):
     ]
 }
 
-Week 1: SUPPRESSION_MODE=full_tx → value is always present, transmitted=True.
-Week 2+: suppression activates, value=null for suppressed plugs.
+full_tx: value is always present, transmitted=True.
+uniform/hiereb: suppression activates, value=null for suppressed plugs.
 """
 from __future__ import annotations
 
@@ -75,6 +75,8 @@ def build_kafka_message(
     stats: SimStats,
     mode: str,
     uniform_delta: float | None = None,
+    active_window_seconds: int | None = None,
+    uniform_allocation_period_seconds: int | None = None,
     output_timestamp: float | None = None,
 ) -> tuple[bytes, list[tuple[int, bool, float | None, float]]]:
     """
@@ -87,6 +89,31 @@ def build_kafka_message(
     """
     plug_messages: list[dict[str, Any]] = []
     variance_updates: list[tuple[int, bool, float | None, float]] = []
+    uniform_delta_h = settings.EPSILON_H if uniform_delta is None else uniform_delta
+    uniform_active_window = (
+        settings.ACTIVE_WINDOW_SECONDS
+        if active_window_seconds is None
+        else active_window_seconds
+    )
+    uniform_allocation_period = (
+        settings.TAU
+        if uniform_allocation_period_seconds is None
+        else uniform_allocation_period_seconds
+    )
+
+    if mode == "uniform":
+        for reading in batch.readings:
+            house_state.get_or_create_plug(
+                plug_uid=reading.plug_uid,
+                household_id=reading.household_id,
+                plug_id=reading.plug_id,
+            )
+        house_state.activate_due_uniform_allocation(batch.timestamp)
+        house_state.ensure_initial_uniform_allocation(
+            timestamp=batch.timestamp,
+            delta_h=uniform_delta_h,
+            active_window_seconds=uniform_active_window,
+        )
 
     for reading in batch.readings:
         plug = house_state.get_or_create_plug(
@@ -102,9 +129,16 @@ def build_kafka_message(
                 bypass_suppression=True,
             )
         elif mode == "uniform":
-            if plug.delta == float("inf"):
-                plug.set_delta(settings.UNIFORM_DELTA if uniform_delta is None else uniform_delta)
-            decision = plug.decide_transmission(reading.value, reading.timestamp)
+            plug_status = house_state.plug_status_for_event(
+                plug,
+                reading.timestamp,
+                uniform_active_window,
+            )
+            decision = plug.decide_transmission(
+                reading.value,
+                reading.timestamp,
+                plug_status=plug_status,
+            )
         else:
             decision = plug.decide_transmission(reading.value, reading.timestamp)
 
@@ -143,10 +177,18 @@ def build_kafka_message(
             "abs_residual": decision.abs_residual,
             "decision": "transmit" if decision.transmitted else "suppress",
             "reason": decision.reason,
-            "plug_status": "active",
+            "plug_status": decision.plug_status,
             "is_forced_transmit": decision.is_forced_transmit,
             "transmitted": decision.transmitted,
         })
+
+    if mode == "uniform":
+        house_state.stage_uniform_allocation_if_due(
+            timestamp=batch.timestamp,
+            delta_h=uniform_delta_h,
+            active_window_seconds=uniform_active_window,
+            allocation_period_seconds=uniform_allocation_period,
+        )
 
     payload = {
         "house_id": batch.house_id,
