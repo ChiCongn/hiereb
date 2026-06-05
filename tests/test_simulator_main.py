@@ -21,6 +21,8 @@ def make_batch(value: float = 105.0) -> TimestepBatch:
         timestamp=1000,
         readings=(
             PlugReading(
+                source_id=1,
+                property=1,
                 plug_uid=make_plug_uid(1, 2, 3),
                 household_id=2,
                 plug_id=3,

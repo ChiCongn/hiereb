@@ -27,6 +27,7 @@ Week 2+: suppression activates, value=null for suppressed plugs.
 from __future__ import annotations
 
 import asyncio
+from itertools import chain
 import json
 import signal
 import time
@@ -45,9 +46,8 @@ from src.simulator.kafka_listeners import (
 )
 from src.simulator.loader import (
     TimestepBatch,
-    data_window_seconds,
-    iter_timestep_batches,
-    load_debs_many,
+    discover_stream_house_ids,
+    iter_timestep_batches_from_files,
     resolve_data_files,
     resolve_house_ids,
 )
@@ -164,10 +164,12 @@ async def run_simulator() -> None:
         replay_speed=settings.REPLAY_SPEED,
         dataset_preset=settings.DATASET_PRESET,
         data_window=settings.DATA_WINDOW,
+        eval_start=settings.EVAL_START,
+        eval_end=settings.EVAL_END,
         stream_time_mode=settings.STREAM_TIME_MODE,
     )
 
-    # ── Load DEBS data (one-time, at startup) ─────────────────────────────
+    # ── Resolve partitioned data; rows are streamed during replay ─────────
     data_files = resolve_data_files(
         settings.DATA_PATH,
         dataset_preset=settings.DATASET_PRESET,
@@ -183,15 +185,28 @@ async def run_simulator() -> None:
         one_house_id=settings.ONE_HOUSE_ID,
         five_house_ids=settings.FIVE_HOUSE_IDS,
     )
-    df = load_debs_many(
+    effective_house_ids = discover_stream_house_ids(
         data_files,
         house_ids=house_ids,
         property_filter=settings.PROPERTY_FILTER,
-        max_duration_seconds=data_window_seconds(settings.DATA_WINDOW),
+        timestamp_start=settings.EVAL_START,
+        timestamp_end=settings.EVAL_END,
     )
+    batches = iter_timestep_batches_from_files(
+        data_files,
+        house_ids=house_ids,
+        property_filter=settings.PROPERTY_FILTER,
+        max_duration_seconds=None,
+        read_chunk_size=settings.STREAM_READ_CHUNK_SIZE,
+        timestamp_start=settings.EVAL_START,
+        timestamp_end=settings.EVAL_END,
+    )
+    try:
+        first_batch = next(batches)
+    except StopIteration as exc:
+        raise ValueError("Configured stream contains no replay batches") from exc
 
     # ── Initialise per-house state ─────────────────────────────────────────
-    effective_house_ids = sorted(int(h_id) for h_id in df["house_id"].unique())
     house_states: dict[int, HouseState] = {
         h_id: HouseState(house_id=h_id) for h_id in effective_house_ids
     }
@@ -242,11 +257,11 @@ async def run_simulator() -> None:
     last_log_time = time.monotonic()
     last_log_count = 0
     prev_ts: int | None = None
-    source_start_timestamp = int(df["timestamp"].min())
+    source_start_timestamp = first_batch.timestamp
     wall_start_timestamp = time.time()
 
     try:
-        for batch in iter_timestep_batches(df):
+        for batch in chain((first_batch,), batches):
             if shutdown_event.is_set():
                 log.info("simulator_shutdown_requested", messages_sent=messages_sent)
                 break
@@ -258,7 +273,10 @@ async def run_simulator() -> None:
             prev_ts = batch.timestamp
 
             # Build and send message
-            house_state = house_states[batch.house_id]
+            house_state = house_states.setdefault(
+                batch.house_id,
+                HouseState(house_id=batch.house_id),
+            )
             output_timestamp = resolve_stream_timestamp(
                 batch.timestamp,
                 source_start_timestamp=source_start_timestamp,

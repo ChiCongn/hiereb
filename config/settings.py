@@ -33,7 +33,12 @@ class Settings(BaseSettings):
     # NOTE: pydantic-settings reads lists from env as JSON.
     # Example: HOUSE_IDS='[1]' or HOUSE_IDS='[0,1,2]'
     HOUSE_IDS: list[int] = Field(default=[1])
-    PROPERTY_FILTER: int = Field(default=0)  # 0 = instantaneous load (Watts)
+    PROPERTY_FILTER: int = Field(default=1)  # DEBS property 1 = load (Watts)
+    WARMUP_START: int = Field(default=1_377_993_600)  # 2013-09-01 00:00:00 UTC
+    WARMUP_END: int = Field(default=1_378_598_399)    # 2013-09-07 23:59:59 UTC
+    EVAL_START: int = Field(default=1_378_598_400)    # 2013-09-08 00:00:00 UTC
+    EVAL_END: int = Field(default=1_379_203_199)      # 2013-09-14 23:59:59 UTC
+    STREAM_READ_CHUNK_SIZE: int = Field(default=10_000)  # rows kept per streamed source file
 
     # ── Simulator ─────────────────────────────────────────────────────────────
     REPLAY_SPEED: int = Field(default=60)          # 60x real-time

@@ -61,6 +61,42 @@ CSV files are expected under `data/`, for example `data/house-1.csv`. Confirm th
 head -2 data/house-1.csv | cut -d',' -f7
 ```
 
+For multi-house runs, split a combined time window into one file per house:
+
+```bash
+python scripts/partition_debs_by_house.py \
+  --input data/all-house/one-day.csv \
+  --output-dir data/partitioned/one-day \
+  --property 1
+```
+
+If the input is already split into full-history `house-*.csv` files, produce
+a one-day partition set directly:
+
+```bash
+python scripts/partition_debs_by_house.py \
+  --input data/house-*.csv \
+  --output-dir data/partitioned/one-day \
+  --property 1 --max-duration-seconds 86400 --skip-malformed --overwrite
+```
+
+The runtime then streams selected partitions rather than concatenating the
+whole multi-house dataset in memory:
+
+```bash
+# One configured house
+DATASET_PRESET=one_house DATA_WINDOW=one_day ONE_HOUSE_ID=1 bash scripts/verify_e2e.sh hiereb
+
+# Five configured houses (use IDs present in your partitions)
+DATASET_PRESET=five_houses DATA_WINDOW=one_day FIVE_HOUSE_IDS='[0,1,2,10,11]' bash scripts/verify_e2e.sh hiereb
+
+# Every partition found in data/partitioned/one-day/
+DATASET_PRESET=all_house DATA_WINDOW=one_day bash scripts/verify_e2e.sh hiereb
+```
+
+Use `STREAM_READ_CHUNK_SIZE` to tune replay memory per selected file; the
+default is `10000` rows.
+
 ## Demo Dashboard
 
 After `scripts/demo_report.sh`:

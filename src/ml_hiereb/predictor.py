@@ -89,7 +89,7 @@ class TimeSlicePredictor:
 
         Args:
             df: DataFrame with columns [timestamp, value, plug_uid].
-                Expected to contain only Property=0 rows (load, Watts).
+                Expected to contain only DEBS property=1 rows (load, Watts).
                 Timestamps are unix integers.
 
         Raises:

@@ -55,8 +55,7 @@ from config.settings import settings
 from src.ml_hiereb.allocator import HierEBAllocator
 from src.ml_hiereb.predictor import TimeSlicePredictor
 from src.simulator.loader import (
-    data_window_seconds,
-    load_debs_many,
+    load_debs,
     resolve_data_files,
     resolve_house_ids,
 )
@@ -90,6 +89,20 @@ def build_house_structure(df) -> dict[int, dict[int, list[int]]]:
     return structure
 
 
+def merge_house_structure(
+    target: dict[int, dict[int, list[int]]],
+    incoming: dict[int, dict[int, list[int]]],
+) -> None:
+    """Merge plug hierarchy from one data partition into a shared structure."""
+    for house_id, households in incoming.items():
+        target_households = target.setdefault(house_id, {})
+        for household_id, plug_uids in households.items():
+            target_plugs = target_households.setdefault(household_id, [])
+            for plug_uid in plug_uids:
+                if plug_uid not in target_plugs:
+                    target_plugs.append(plug_uid)
+
+
 def resolve_error_budget_watts(df, epsilon_h: float) -> float:
     """
     Resolve EPSILON_H into an absolute Watt budget.
@@ -104,6 +117,24 @@ def resolve_error_budget_watts(df, epsilon_h: float) -> float:
     house_load = df.groupby(["house_id", "timestamp"])["value"].sum()
     mean_house_load = float(house_load.groupby("house_id").mean().mean())
     return epsilon_h * mean_house_load
+
+
+def resolve_error_budget_from_load_stats(
+    load_sum_by_house: dict[int, float],
+    sample_count_by_house: dict[int, int],
+    epsilon_h: float,
+) -> float:
+    """Resolve the Watt budget from training partitions without concatenating them."""
+    if epsilon_h >= 1.0:
+        return epsilon_h
+    means = [
+        load_sum_by_house[house_id] / sample_count_by_house[house_id]
+        for house_id in load_sum_by_house
+        if sample_count_by_house.get(house_id, 0) > 0
+    ]
+    if not means:
+        raise ValueError("No training house loads available to resolve EPSILON_H")
+    return epsilon_h * (sum(means) / len(means))
 
 
 # ─── Three concurrent tasks ───────────────────────────────────────────────────
@@ -279,9 +310,13 @@ async def _main() -> None:
         tau=settings.TAU,
         dataset_preset=settings.DATASET_PRESET,
         data_window=settings.DATA_WINDOW,
+        warmup_start=settings.WARMUP_START,
+        warmup_end=settings.WARMUP_END,
+        eval_start=settings.EVAL_START,
+        eval_end=settings.EVAL_END,
     )
 
-    # ── Load and split data ────────────────────────────────────────────────
+    # ── Resolve partition files and fit one partition at a time ────────────
     data_files = resolve_data_files(
         settings.DATA_PATH,
         dataset_preset=settings.DATASET_PRESET,
@@ -297,33 +332,57 @@ async def _main() -> None:
         one_house_id=settings.ONE_HOUSE_ID,
         five_house_ids=settings.FIVE_HOUSE_IDS,
     )
-    df_full = load_debs_many(
-        data_files,
-        house_ids=house_ids,
-        property_filter=settings.PROPERTY_FILTER,
-        max_duration_seconds=data_window_seconds(settings.DATA_WINDOW),
-    )
+    predictor = TimeSlicePredictor(bin_seconds=settings.PREDICTOR_BIN_SECONDS)
+    house_structure: dict[int, dict[int, list[int]]] = {}
+    load_sum_by_house: dict[int, float] = {}
+    sample_count_by_house: dict[int, int] = {}
+    initial_batch_start: int | None = settings.EVAL_START
+    total_rows = 0
+    total_training_rows = 0
 
-    ts_min = df_full["timestamp"].min()
-    initial_batch_start = int(ts_min)
-    if settings.TRAINING_DAYS <= 0:
-        df_train = df_full
-    else:
-        training_seconds = settings.TRAINING_DAYS * 24 * 3600
-        df_train = df_full[df_full["timestamp"] < ts_min + training_seconds]
+    for data_file in data_files:
+        df_full = load_debs(
+            data_file,
+            house_ids=house_ids,
+            property_filter=settings.PROPERTY_FILTER,
+            timestamp_start=settings.WARMUP_START,
+            timestamp_end=settings.EVAL_END,
+        )
+        df_train = df_full[
+            (df_full["timestamp"] >= settings.WARMUP_START)
+            & (df_full["timestamp"] <= settings.WARMUP_END)
+        ]
+        if df_train.empty:
+            continue
+
+        predictor.fit(df_train)
+        merge_house_structure(house_structure, build_house_structure(df_full))
+
+        house_load = df_train.groupby(["house_id", "timestamp"])["value"].sum()
+        per_house_stats = house_load.groupby("house_id").agg(["sum", "count"])
+        for house_id, row in per_house_stats.iterrows():
+            key = int(house_id)
+            load_sum_by_house[key] = load_sum_by_house.get(key, 0.0) + float(row["sum"])
+            sample_count_by_house[key] = sample_count_by_house.get(key, 0) + int(row["count"])
+
+        total_rows += len(df_full)
+        total_training_rows += len(df_train)
+        del df_full, df_train
+
+    if initial_batch_start is None or not predictor.is_fitted():
+        raise ValueError("No training data loaded from configured data partitions")
+
     log.info(
         "training_split",
-        total_rows=len(df_full),
-        training_rows=len(df_train),
-        training_days=settings.TRAINING_DAYS,
+        files=len(data_files),
+        total_rows=total_rows,
+        training_rows=total_training_rows,
+        warmup_start=settings.WARMUP_START,
+        warmup_end=settings.WARMUP_END,
+        eval_start=settings.EVAL_START,
+        eval_end=settings.EVAL_END,
     )
 
-    # ── Fit predictor ──────────────────────────────────────────────────────
-    predictor = TimeSlicePredictor(bin_seconds=settings.PREDICTOR_BIN_SECONDS)
-    predictor.fit(df_train)
-
-    # ── Build house structure ──────────────────────────────────────────────
-    house_structure = build_house_structure(df_full)
     log.info(
         "house_structure_built",
         houses=len(house_structure),
@@ -332,7 +391,11 @@ async def _main() -> None:
     )
 
     # ── Init allocator ─────────────────────────────────────────────────────
-    epsilon_h_watts = resolve_error_budget_watts(df_train, settings.EPSILON_H)
+    epsilon_h_watts = resolve_error_budget_from_load_stats(
+        load_sum_by_house,
+        sample_count_by_house,
+        settings.EPSILON_H,
+    )
     log.info(
         "error_budget_resolved",
         epsilon_h_config=settings.EPSILON_H,
