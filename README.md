@@ -141,11 +141,13 @@ After `scripts/demo_report.sh`:
 
 Main panels for report:
 
-- `Actual vs Predicted Load`
-- `House Error e_h`
+- `Actual vs Reconstructed Load`
+- `House Error with Delta_H`
 - `Transmission Rate Trend`
 - `Rolling RMSE (1 minute)`
-- Stat cards: `Average TR`, `RMSE`, `P90 |e_h|`, `Violation Rate |e_h| > 50W`
+- Stat cards: `Average TR`, `RMSE`, `P95 |E_H|`, `Violation Rate |E_H| > Delta_H`
+- Pareto panels: `TR vs RMSE`, `TR vs P95`
+- Threshold panels: `Threshold Trace`, `Threshold Distribution`
 - `Run Summary (All Houses)` table
 
 Detailed Vietnamese demo and inspection guide:
@@ -185,3 +187,8 @@ Generate charts from exported CSV:
 ```bash
 python3 scripts/generate_report_charts.py --input-dir results/demo_*/export --output-dir results/demo_*/charts
 ```
+
+When the input folder contains the six required CSV files, the chart generator
+also writes Pareto SVGs and HierEB threshold SVGs using names like
+`sweep01_house0_pareto_tr_rmse.svg` and
+`sweep01_house0_hiereb_threshold_trace.svg`.

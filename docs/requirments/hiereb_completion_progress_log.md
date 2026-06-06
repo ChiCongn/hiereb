@@ -41,7 +41,7 @@ Quy tắc cập nhật:
 | P05 | `done` | Prompt 06 | Sáu CSV output đúng schema | `2026-06-06T08:10:49+07:00`; export/aggregator tests `15 passed`; full pytest `147 passed` |
 | P06 | `done` | Prompt 07 | Rolling metrics và summary metrics | `2026-06-06T08:15:16+07:00`; metrics/export tests `18 passed`; full pytest `150 passed` |
 | P07 | `done` | Prompt 08 | Sweep runner và metadata `run_id` | `2026-06-06T08:40:59+07:00`; runner tests `5 passed`; full pytest `155 passed` |
-| P08 | `todo` | Prompt 09 | Pareto SVG và dashboard update | Chưa có |
+| P08 | `done` | Prompt 09 | Pareto SVG và dashboard update | `2026-06-06T08:57:54+07:00`; chart/dashboard tests `2 passed`; full pytest `157 passed` |
 | P09 | `todo` | Prompt 10 | Final docs cleanup và verification run | Chưa có |
 | P10 | `todo` | Prompt 10 | Tick verification checklist cuối cùng | Chưa có |
 
@@ -70,8 +70,8 @@ Trạng thái tài liệu điều phối:
 | P1-05 | P1 | `done` | P06 | Rolling metrics tính theo event-time window | `pytest tests/test_csv_exporter.py tests/test_aggregator.py -q` | Cửa sổ `(t - 3600, t]`, min 60 timestamp |
 | P1-06 | P1 | `done` | P05 | Export đủ 6 CSV bắt buộc: experiment_runs, event_decisions, house_timeseries, plug_metrics, house_summary, threshold_trace | `pytest tests/test_csv_exporter.py -q` | Schema ổn định bằng `CSV_SCHEMAS` |
 | P2-01 | P2 | `done` | P07 | Sweep runner có config grid và metadata `run_id` | `.venv/bin/python -m pytest tests/test_experiment_runner.py -q` | Dùng để so sánh Pareto |
-| P2-02 | P2 | `todo` | P08 | Có SVG Pareto/transmission/RMSE từ output CSV | `pytest tests/test_dashboard.py -q` | Nếu không có test UI, ghi smoke evidence |
-| P2-03 | P2 | `todo` | P08 | Dashboard hiển thị `P95`, `Delta_H`, `sigma_floor`, `active_plug_count` | `pytest tests/test_dashboard.py -q` | Post-hoc là đủ |
+| P2-02 | P2 | `done` | P08 | Có SVG Pareto/transmission/RMSE từ output CSV | `.venv/bin/python -m pytest tests/test_generate_report_charts.py tests/test_dashboard.py -q` | SVG fixture và legacy smoke đã chạy |
+| P2-03 | P2 | `done` | P08 | Dashboard hiển thị `P95`, `Delta_H`, threshold trace/distribution | `.venv/bin/python -m pytest tests/test_generate_report_charts.py tests/test_dashboard.py -q` | Post-hoc là đủ |
 | P2-04 | P2 | `done` | P06 | Plug metrics có `event_count`, `transmitted_count`, `suppressed_count`, `missing_prediction_count` | `pytest tests/test_csv_exporter.py -q` | Đã test tách reconstruction/prediction metrics |
 
 ## 4. Baseline
@@ -314,12 +314,33 @@ Baseline phải được ghi sau khi chạy Prompt 00.
 
 ### P08 - Pareto SVG và dashboard
 
-- Trạng thái: `todo`
-- File dự kiến: dashboard/export chart files hiện có, `tests/test_dashboard.py`
-- Test đã chạy: chưa có
-- Kết quả: chưa có
+- Trạng thái: `done`
+- File đã sửa: `scripts/generate_report_charts.py`,
+  `grafana/dashboards/hiereb_main.json`, `README.md`,
+  `tests/test_generate_report_charts.py`, `tests/test_dashboard.py`
+- Test đã chạy:
+  - `python3 -m compileall scripts/generate_report_charts.py tests/test_generate_report_charts.py tests/test_dashboard.py`
+  - `.venv/bin/python -m pytest tests/test_generate_report_charts.py tests/test_dashboard.py -q`
+  - `python3 scripts/generate_report_charts.py --input-dir results/demo_20260505_165544/export --output-dir /tmp/hiereb_charts_legacy_smoke`
+  - `.venv/bin/python -m pytest -q`
+  - `rg -n "50W|> 50|P90|percentile_cont\\(0\\.9\\)|Actual vs Predicted" scripts/generate_report_charts.py grafana/dashboards/hiereb_main.json README.md`
+  - `python3 scripts/generate_report_charts.py --help`
+- Kết quả:
+  - Compile: pass.
+  - Chart/dashboard tests: `2 passed in 0.06s`.
+  - Full suite: `157 passed in 1.17s`.
+  - Legacy chart generator smoke: pass, sinh `chart_actual_vs_reconstructed_*`.
+  - Acceptance grep: không có output cho `50W`, `> 50`, `P90`, `percentile_cont(0.9)` hoặc `Actual vs Predicted` trong script/dashboard/README.
+- Acceptance evidence:
+  - Required CSV input sinh Pareto SVG `*_pareto_tr_rmse.svg` và `*_pareto_tr_p95.svg`.
+  - Pareto point label encode `epsilon_ratio` bằng text `eps=...`.
+  - Detail time-series chỉ sinh cho `epsilon_ratio=0.05` ở mode `uniform`/`hiereb`.
+  - Có SVG `*_hiereb_threshold_trace.svg` và `*_hiereb_threshold_distribution.svg`.
+  - Dashboard dùng `actual_load` vs `reconstructed_load`.
+  - Dashboard có `TR vs RMSE`, `TR vs P95`, `Threshold Trace`, `Threshold Distribution`.
+  - Dashboard dùng `P95` và biến `Delta_H`, không dùng hard-code `50W` cho kết luận chính.
 - Blocker: không có
-- Next step: chờ P07 có dữ liệu sweep
+- Next step: chạy Prompt 10 để cleanup docs cuối và final verification
 
 ### P09 - Final verification
 
@@ -697,6 +718,40 @@ Baseline phải được ghi sau khi chạy Prompt 00.
   - Không có.
 - Next step:
   - Chạy Prompt 09 để tạo Pareto SVG và dashboard update.
+
+### 2026-06-06T08:57:54+07:00 - Phase P08: Pareto SVG và dashboard
+
+- Trạng thái: `done`
+- File đã sửa:
+  - `scripts/generate_report_charts.py`
+  - `grafana/dashboards/hiereb_main.json`
+  - `README.md`
+  - `tests/test_generate_report_charts.py`
+  - `tests/test_dashboard.py`
+  - `docs/requirments/hiereb_completion_progress_log.md`
+- Lệnh đã chạy:
+  - `python3 -m compileall scripts/generate_report_charts.py tests/test_generate_report_charts.py tests/test_dashboard.py`
+  - `.venv/bin/python -m pytest tests/test_generate_report_charts.py tests/test_dashboard.py -q`
+  - `python3 scripts/generate_report_charts.py --input-dir results/demo_20260505_165544/export --output-dir /tmp/hiereb_charts_legacy_smoke`
+  - `.venv/bin/python -m pytest -q`
+  - `rg -n "50W|> 50|P90|percentile_cont\\(0\\.9\\)|Actual vs Predicted" scripts/generate_report_charts.py grafana/dashboards/hiereb_main.json README.md`
+  - `python3 scripts/generate_report_charts.py --help`
+- Kết quả:
+  - Compile: pass.
+  - Chart/dashboard tests: `2 passed in 0.06s`.
+  - Full suite: `157 passed in 1.17s`.
+  - Legacy chart generator smoke: pass.
+  - Acceptance grep: không có output.
+- Acceptance evidence:
+  - SVG Pareto TR/RMSE và TR/P95 được sinh từ required CSV fixture.
+  - SVG threshold trace/distribution cho `hiereb` được sinh từ `threshold_trace.csv`.
+  - Naming convention dùng `{run_group}_house{house_id}_{chart_name}.svg` và `{run_group}_house{house_id}_{mode}_{chart_name}.svg`.
+  - Dashboard có đủ panel tối thiểu và dùng corrected metrics.
+  - Dashboard dùng `P95` và biến `Delta_H`, không dùng hard-code `50W`.
+- Blocker:
+  - Không có.
+- Next step:
+  - Chạy Prompt 10 để cleanup docs cuối và final verification.
 
 ## 7. Mẫu log cho các lần cập nhật sau
 
