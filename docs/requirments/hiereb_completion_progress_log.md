@@ -38,7 +38,7 @@ Quy tắc cập nhật:
 | P03 | `done` | Prompt 03 | Event decisions và reconstruction metric | `2026-06-05T21:19:59+07:00`; aggregator/simulator tests `17 passed`; full pytest `124 passed` |
 | P04A | `done` | Prompt 04 | Uniform active-budget baseline | `2026-06-05T21:31:39+07:00`; related tests `32 passed`; full pytest `132 passed` |
 | P04B | `done` | Prompt 05 | HierEB allocator budget/timing/sigma_floor | `2026-06-05T21:52:45+07:00`; allocator/ML tests `30 passed`; full pytest `143 passed` |
-| P05 | `todo` | Prompt 06 | Sáu CSV output đúng schema | Chưa có |
+| P05 | `done` | Prompt 06 | Sáu CSV output đúng schema | `2026-06-06T08:10:49+07:00`; export/aggregator tests `15 passed`; full pytest `147 passed` |
 | P06 | `todo` | Prompt 07 | Rolling metrics và summary metrics | Chưa có |
 | P07 | `todo` | Prompt 08 | Sweep runner và metadata `run_id` | Chưa có |
 | P08 | `todo` | Prompt 09 | Pareto SVG và dashboard update | Chưa có |
@@ -68,7 +68,7 @@ Trạng thái tài liệu điều phối:
 | P1-03 | P1 | `done` | P04B | Threshold update có `threshold_version` và `effective_after_time` | `pytest tests/test_allocator.py tests/test_simulator_main.py -q` | Tránh retroactive decision |
 | P1-04 | P1 | `todo` | P04A/P04B | Inactive plug và reactivation không phá budget | `pytest tests/test_allocator.py tests/test_plug_state.py -q` | Active set cần rõ |
 | P1-05 | P1 | `todo` | P06 | Rolling metrics tính theo event-time window | `pytest tests/test_aggregator.py -q` | Cửa sổ 1 giờ nếu không có yêu cầu khác |
-| P1-06 | P1 | `todo` | P05 | Export đủ 6 CSV: events, metrics_per_plug, metrics_per_household, metrics_per_house, experiments_summary, threshold_history | `pytest tests/test_exports.py -q` | Schema phải ổn định |
+| P1-06 | P1 | `done` | P05 | Export đủ 6 CSV bắt buộc: experiment_runs, event_decisions, house_timeseries, plug_metrics, house_summary, threshold_trace | `pytest tests/test_csv_exporter.py -q` | Schema ổn định bằng `CSV_SCHEMAS` |
 | P2-01 | P2 | `todo` | P07 | Sweep runner có config grid và metadata `run_id` | `pytest tests/test_experiment_runner.py -q` | Dùng để so sánh Pareto |
 | P2-02 | P2 | `todo` | P08 | Có SVG Pareto/transmission/RMSE từ output CSV | `pytest tests/test_dashboard.py -q` | Nếu không có test UI, ghi smoke evidence |
 | P2-03 | P2 | `todo` | P08 | Dashboard hiển thị `P95`, `Delta_H`, `sigma_floor`, `active_plug_count` | `pytest tests/test_dashboard.py -q` | Post-hoc là đủ |
@@ -218,12 +218,41 @@ Baseline phải được ghi sau khi chạy Prompt 00.
 
 ### P05 - Sáu CSV output
 
-- Trạng thái: `todo`
-- File dự kiến: export scripts/module hiện có, `tests/test_exports.py`
-- Test đã chạy: chưa có
-- Kết quả: chưa có
+- Trạng thái: `done`
+- File đã sửa: `src/aggregator/csv_exporter.py`,
+  `scripts/export_required_csv.py`, `tests/test_csv_exporter.py`
+- Test đã chạy:
+  - `python3 -m compileall src/aggregator scripts/export_required_csv.py tests/test_csv_exporter.py`
+  - `.venv/bin/python -m pytest tests/test_csv_exporter.py -q`
+  - `.venv/bin/python -m pytest tests/test_csv_exporter.py tests/test_aggregator.py -q`
+  - `.venv/bin/python -m pytest -q`
+- Kết quả:
+  - Compile: pass.
+  - CSV exporter schema tests: `4 passed in 0.04s`.
+  - Exporter/aggregator tests: `15 passed in 0.17s`.
+  - Full suite: `147 passed in 0.83s`.
+- Acceptance evidence:
+  - Có script `scripts/export_required_csv.py` tạo đủ 6 CSV từ JSON artifact nhỏ.
+  - Có module `src/aggregator/csv_exporter.py` với schema cố định cho:
+    `experiment_runs.csv`, `event_decisions.csv`, `house_timeseries.csv`,
+    `plug_metrics.csv`, `house_summary.csv`, `threshold_trace.csv`.
+  - Tất cả CSV có cột `mode` trực tiếp.
+  - Test schema kiểm tra header exact columns cho cả 6 CSV.
+  - Null được ghi thành field rỗng trong CSV, không ghi `0` giả.
+  - `event_decisions.csv` có `plug_status`, `is_forced_transmit`, `reason`.
+  - `house_timeseries.csv` có `rolling_tr_1h`, `rolling_rmse_1h`,
+    `rolling_insufficient_data`.
+  - `plug_metrics.csv` có reconstruction/prediction RMSE/MAE,
+    `inactive_reactivation_count`, `missing_prediction_count`.
+  - `house_summary.csv` có `p95_abs_house_error`, `max_abs_house_error`,
+    `Delta_H`, `epsilon_ratio`.
+  - `threshold_trace.csv` có `allocation_time`, `effective_after_time`,
+    `threshold_version`, `trace_granularity`, `sigma_floor_used`,
+    `delta_used_for_censored_update`.
+  - `experiment_runs.csv` có `uniform_delta_initial`, `sigma_floor_used`,
+    sweep metadata.
 - Blocker: không có
-- Next step: chờ P03 và P04B done
+- Next step: chạy Prompt 07 để mở rộng rolling/summary metrics runtime nếu cần
 
 ### P06 - Rolling và summary metrics
 
@@ -529,6 +558,36 @@ Baseline phải được ghi sau khi chạy Prompt 00.
   - Không có.
 - Next step:
   - Chạy Prompt 06 để tạo sáu CSV output đúng schema.
+
+### 2026-06-06T08:10:49+07:00 - Phase P05: Sáu CSV output
+
+- Trạng thái: `done`
+- File đã sửa:
+  - `src/aggregator/csv_exporter.py`
+  - `scripts/export_required_csv.py`
+  - `tests/test_csv_exporter.py`
+  - `docs/requirments/hiereb_completion_progress_log.md`
+- Lệnh đã chạy:
+  - `python3 -m compileall src/aggregator scripts/export_required_csv.py tests/test_csv_exporter.py`
+  - `.venv/bin/python -m pytest tests/test_csv_exporter.py -q`
+  - `.venv/bin/python -m pytest tests/test_csv_exporter.py tests/test_aggregator.py -q`
+  - `.venv/bin/python -m pytest -q`
+- Kết quả:
+  - Compile: pass.
+  - CSV exporter schema tests: `4 passed in 0.04s`.
+  - Exporter/aggregator tests: `15 passed in 0.17s`.
+  - Full suite: `147 passed in 0.83s`.
+- Acceptance evidence:
+  - `scripts/export_required_csv.py` tạo đủ 6 CSV bắt buộc từ một JSON artifact nhỏ.
+  - `tests/test_csv_exporter.py` kiểm tra exact schema columns cho cả 6 CSV.
+  - Tất cả schema có cột `mode`.
+  - Test xác nhận null được ghi thành field rỗng, không ghi `0` giả.
+  - Test xác nhận các cột bắt buộc cho event decisions, rolling house timeseries,
+    plug metrics, house summary, threshold trace và experiment runs.
+- Blocker:
+  - Không có.
+- Next step:
+  - Chạy Prompt 07 để mở rộng rolling/summary metrics runtime nếu cần.
 
 ## 7. Mẫu log cho các lần cập nhật sau
 
