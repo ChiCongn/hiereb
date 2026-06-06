@@ -42,8 +42,8 @@ Quy tắc cập nhật:
 | P06 | `done` | Prompt 07 | Rolling metrics và summary metrics | `2026-06-06T08:15:16+07:00`; metrics/export tests `18 passed`; full pytest `150 passed` |
 | P07 | `done` | Prompt 08 | Sweep runner và metadata `run_id` | `2026-06-06T08:40:59+07:00`; runner tests `5 passed`; full pytest `155 passed` |
 | P08 | `done` | Prompt 09 | Pareto SVG và dashboard update | `2026-06-06T08:57:54+07:00`; chart/dashboard tests `2 passed`; full pytest `157 passed` |
-| P09 | `todo` | Prompt 10 | Final docs cleanup và verification run | Chưa có |
-| P10 | `todo` | Prompt 10 | Tick verification checklist cuối cùng | Chưa có |
+| P09 | `done` | Prompt 10 | Final docs cleanup và verification run | `2026-06-06T14:38:40+07:00`; full pytest `158 passed`; demo-smoke/reduced sweep pass |
+| P10 | `done` | Prompt 10 | Tick verification checklist cuối cùng | `2026-06-06T14:38:40+07:00`; checklist có final verification evidence |
 
 Trạng thái tài liệu điều phối:
 
@@ -752,6 +752,47 @@ Baseline phải được ghi sau khi chạy Prompt 00.
   - Không có.
 - Next step:
   - Chạy Prompt 10 để cleanup docs cuối và final verification.
+
+### 2026-06-06T14:38:40+07:00 - Phase P09/P10: Final verification
+
+- Trạng thái: `done`
+- File đã sửa:
+  - `src/ml_hiereb/main.py`
+  - `scripts/verify_e2e.sh`
+  - `tests/test_ml_main.py`
+  - `docs/demo_system_guide.md`
+  - `docs/requirments/hiereb_verification_checklist.md`
+  - `docs/requirments/hiereb_completion_progress_log.md`
+- Lệnh đã chạy:
+  - `.venv/bin/python -m pytest tests/test_ml_main.py tests/test_allocator.py -q`
+  - `.venv/bin/python -m pytest tests/test_csv_exporter.py tests/test_generate_report_charts.py tests/test_dashboard.py -q`
+  - `.venv/bin/python -m pytest -q`
+  - `DATASET_PRESET=custom DATA_FILE=final-smoke-house0-property1.csv DATA_WINDOW=all HOUSE_IDS='[0]' PROPERTY_FILTER=1 E2E_RUNTIME_SECONDS=40 REPLAY_SPEED=600 STREAM_READ_CHUNK_SIZE=20000 KEEP_STACK=0 ML_READY_TIMEOUT_SECONDS=180 bash scripts/verify_e2e.sh hiereb`
+  - `DATASET_PRESET=custom DATA_FILE=final-smoke-house0-property1.csv DATA_WINDOW=all HOUSE_IDS='[0]' HOUSE_ID=0 PROPERTY_FILTER=1 E2E_RUNTIME_SECONDS=40 REPLAY_SPEED=600 STREAM_READ_CHUNK_SIZE=20000 KEEP_STACK=0 ML_READY_TIMEOUT_SECONDS=180 bash scripts/demo_report.sh`
+  - `.venv/bin/python scripts/export_required_csv.py --input-json /tmp/hiereb_final_required_artifact.json --output-dir /tmp/hiereb_final_required_csv`
+  - `.venv/bin/python scripts/generate_report_charts.py --input-dir /tmp/hiereb_final_chart_export --output-dir /tmp/hiereb_final_required_charts`
+  - `DATASET_PRESET=custom DATA_FILE=final-smoke-house0-property1.csv DATA_WINDOW=all HOUSE_IDS='[0]' HOUSE_ID=0 PROPERTY_FILTER=1 REPLAY_SPEED=600 STREAM_READ_CHUNK_SIZE=20000 KEEP_STACK=0 ML_READY_TIMEOUT_SECONDS=180 bash scripts/run_sweep.sh --execute --reduced --sweep-id finalverify --house-id 0 --runtime-seconds 12`
+  - `rg -n "property=0|property = 0|--property 0|Property=0|instantaneous load|property 0|P90|p90|Actual vs Predicted|actual_vs_pred|50W" README.md docs/demo_system_guide.md docs/requirments/hiereb_verification_checklist.md`
+- Kết quả:
+  - Allocator/ML tests: `31 passed in 0.32s`.
+  - CSV/chart/dashboard tests: `9 passed in 0.09s`.
+  - Full suite: `158 passed in 1.23s`.
+  - Docker E2E `hiereb`: `473` rows, avg TR `0.5603164265889194`, RMSE `0.15888404429611205`, pass.
+  - Demo-smoke đủ 3 mode: `results/demo_20260606_141359/e2e_summary.csv`.
+  - Reduced sweep: `results/sweeps/finalverify/e2e_summary.csv`, 7 run pass.
+  - 6 CSV bắt buộc được sinh ở `/tmp/hiereb_final_required_csv`.
+  - SVG Pareto và threshold trace/distribution được sinh ở `/tmp/hiereb_final_required_charts`.
+  - README/demo guide không còn hướng dẫn `property=0`; checklist chỉ còn dòng test hợp lệ "property=1 loại bỏ property=0".
+- Acceptance evidence:
+  - Sửa runtime bug: ML reallocation loop chuyển sang allocation theo event-time đã quan sát, không publish threshold zero trước khi simulator gửi event evaluation.
+  - `scripts/verify_e2e.sh` truyền `PROPERTY_FILTER=1`, start ML cho `uniform/hiereb`, và tránh lỗi `pipefail` khi grep log readiness.
+  - Demo-smoke house `0`, property `1`: `full_tx` TR `1`, `uniform` TR `0.7296153535991592`, `hiereb` TR `0.5590637247796795`.
+  - Reduced sweep `finalverify`: epsilon `[0.02, 0.05, 0.10]`, `full_tx` một lần, `uniform/hiereb` mỗi epsilon.
+  - Checklist final verification được tick theo evidence thật, không tick các mục chưa kiểm riêng.
+- Blocker:
+  - Không có.
+- Next step:
+  - Commit final verification changes.
 
 ## 7. Mẫu log cho các lần cập nhật sau
 

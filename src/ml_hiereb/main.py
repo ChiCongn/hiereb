@@ -308,6 +308,25 @@ def resolve_active_plug_uids_by_house(
     return active_by_house
 
 
+def due_event_time_allocations(
+    latest_event_timestamp: int | None,
+    next_allocation_time: int,
+    allocation_period_seconds: int,
+) -> list[int]:
+    """Return event-time allocation boundaries ready to process."""
+    if allocation_period_seconds <= 0:
+        raise ValueError("allocation_period_seconds must be positive")
+    if latest_event_timestamp is None:
+        return []
+
+    due_times: list[int] = []
+    allocation_time = next_allocation_time
+    while latest_event_timestamp >= allocation_time:
+        due_times.append(allocation_time)
+        allocation_time += allocation_period_seconds
+    return due_times
+
+
 async def publish_thresholds(
     producer: AIOKafkaProducer,
     allocator: HierEBAllocator,
@@ -454,11 +473,11 @@ async def reallocation_loop(
     last_event_timestamp_by_plug: dict[int, int],
 ) -> None:
     """
-    Every TAU seconds: run water-filling, publish new deltas to hiereb.thresholds.
+    Every TAU event-time seconds: run water-filling and publish new deltas.
     """
     tau = settings.TAU
     sleep_seconds = _scaled_sleep_seconds(tau)
-    allocation_time = initial_allocation_time
+    next_allocation_time = initial_allocation_time + tau
 
     while not shutdown.is_set():
         try:
@@ -468,31 +487,47 @@ async def reallocation_loop(
         if shutdown.is_set():
             break
 
-        allocation_time += tau
-        active_plug_uids_by_house = resolve_active_plug_uids_by_house(
-            house_structure,
-            last_event_timestamp_by_plug,
-            allocation_time=allocation_time,
-            active_window_seconds=settings.ACTIVE_WINDOW_SECONDS,
+        latest_event_timestamp = (
+            max(last_event_timestamp_by_plug.values())
+            if last_event_timestamp_by_plug
+            else None
         )
-        new_deltas = allocator.reallocate(
-            house_structure,
-            active_plug_uids_by_house=active_plug_uids_by_house,
-            allocation_time=allocation_time,
-            effective_after_time=allocation_time,
+        due_allocations = due_event_time_allocations(
+            latest_event_timestamp,
+            next_allocation_time,
+            tau,
         )
+        if not due_allocations:
+            continue
 
-        await publish_thresholds(producer, allocator, house_structure, new_deltas)
+        for allocation_time in due_allocations:
+            active_plug_uids_by_house = resolve_active_plug_uids_by_house(
+                house_structure,
+                last_event_timestamp_by_plug,
+                allocation_time=allocation_time,
+                active_window_seconds=settings.ACTIVE_WINDOW_SECONDS,
+            )
+            new_deltas = allocator.reallocate(
+                house_structure,
+                active_plug_uids_by_house=active_plug_uids_by_house,
+                allocation_time=allocation_time,
+                effective_after_time=allocation_time,
+            )
 
-        log.info(
-            "thresholds_published",
-            house_count=len(house_structure),
-            plug_count=len(new_deltas),
-            tau=tau,
-            allocation_time=allocation_time,
-            active_plug_count=sum(len(active) for active in active_plug_uids_by_house.values()),
-            sleep_seconds=round(sleep_seconds, 3),
-        )
+            await publish_thresholds(producer, allocator, house_structure, new_deltas)
+
+            log.info(
+                "thresholds_published",
+                house_count=len(house_structure),
+                plug_count=len(new_deltas),
+                tau=tau,
+                allocation_time=allocation_time,
+                active_plug_count=sum(len(active) for active in active_plug_uids_by_house.values()),
+                latest_event_timestamp=latest_event_timestamp,
+                sleep_seconds=round(sleep_seconds, 3),
+            )
+
+        next_allocation_time = due_allocations[-1] + tau
 
 
 # ─── Entry point ──────────────────────────────────────────────────────────────

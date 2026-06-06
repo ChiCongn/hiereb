@@ -16,6 +16,7 @@ from src.ml_hiereb.main import (
     build_threshold_payload,
     collect_warmup_residuals_by_house,
     compute_sigma_floor_by_house,
+    due_event_time_allocations,
     flatten_warmup_residuals_by_plug,
     merge_house_structure,
     resolve_active_plug_uids_by_house,
@@ -139,3 +140,13 @@ def test_resolve_active_plug_uids_by_house_uses_event_time_window():
     )
 
     assert active == {1: {101, 201}}
+
+
+def test_due_event_time_allocations_waits_for_observed_event_time():
+    assert due_event_time_allocations(None, 1300, 300) == []
+    assert due_event_time_allocations(1299, 1300, 300) == []
+    assert due_event_time_allocations(1300, 1300, 300) == [1300]
+    assert due_event_time_allocations(1900, 1300, 300) == [1300, 1600, 1900]
+
+    with pytest.raises(ValueError, match="allocation_period_seconds"):
+        due_event_time_allocations(1300, 1300, 0)

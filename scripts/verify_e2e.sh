@@ -8,6 +8,7 @@
 # Useful overrides:
 #   E2E_RUNTIME_SECONDS=45 bash scripts/verify_e2e.sh hiereb
 #   RUN_ID_OVERRIDE=sweep01_hiereb_house0_eps005 bash scripts/verify_e2e.sh hiereb
+#   DATASET_PRESET=five_houses DATA_WINDOW=one_day FIVE_HOUSE_IDS='[0,1,2,10,11]' bash scripts/verify_e2e.sh hiereb
 #   KEEP_STACK=1 bash scripts/verify_e2e.sh
 
 set -euo pipefail
@@ -15,21 +16,37 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+dotenv_or_default() {
+  local key="$1"
+  local fallback="$2"
+  local value=""
+  if [[ -f .env ]]; then
+    value="$(sed -n "s/^${key}=//p" .env | tail -n 1)"
+  fi
+  printf "%s" "${value:-$fallback}"
+}
+
 MODE_ARG="${1:-all}"
 E2E_RUNTIME_SECONDS="${E2E_RUNTIME_SECONDS:-35}"
-REPLAY_SPEED="${REPLAY_SPEED:-60}"
-HOUSE_IDS_JSON="${HOUSE_IDS:-[1]}"
-DATA_FILE="${DATA_FILE:-house-1.csv}"
-DATA_GLOB="${DATA_GLOB:-}"
-DATA_WINDOW="${DATA_WINDOW:-all}"
-EPSILON_H="${EPSILON_H:-0.05}"
-TAU="${TAU:-300}"
-BATCH_INTERVAL_SECONDS="${BATCH_INTERVAL_SECONDS:-300}"
-UNIFORM_DELTA="${UNIFORM_DELTA:-10.0}"
-SWEEP_ID="${SWEEP_ID:-sweep01}"
-IS_SWEEP="${IS_SWEEP:-false}"
-SWEEP_SIZE="${SWEEP_SIZE:-0}"
-REDUCED_SWEEP="${REDUCED_SWEEP:-false}"
+REPLAY_SPEED="${REPLAY_SPEED:-$(dotenv_or_default REPLAY_SPEED 60)}"
+DATASET_PRESET="${DATASET_PRESET:-$(dotenv_or_default DATASET_PRESET custom)}"
+HOUSE_IDS_JSON="${HOUSE_IDS:-$(dotenv_or_default HOUSE_IDS '[1]')}"
+ONE_HOUSE_ID="${ONE_HOUSE_ID:-$(dotenv_or_default ONE_HOUSE_ID 1)}"
+FIVE_HOUSE_IDS_JSON="${FIVE_HOUSE_IDS:-$(dotenv_or_default FIVE_HOUSE_IDS '[0,1,2,3,4]')}"
+DATA_FILE="${DATA_FILE:-$(dotenv_or_default DATA_FILE house-1.csv)}"
+DATA_GLOB="${DATA_GLOB:-$(dotenv_or_default DATA_GLOB '')}"
+DATA_WINDOW="${DATA_WINDOW:-$(dotenv_or_default DATA_WINDOW all)}"
+STREAM_READ_CHUNK_SIZE="${STREAM_READ_CHUNK_SIZE:-$(dotenv_or_default STREAM_READ_CHUNK_SIZE 10000)}"
+PROPERTY_FILTER="${PROPERTY_FILTER:-$(dotenv_or_default PROPERTY_FILTER 1)}"
+EPSILON_H="${EPSILON_H:-$(dotenv_or_default EPSILON_H 0.05)}"
+TAU="${TAU:-$(dotenv_or_default TAU 300)}"
+BATCH_INTERVAL_SECONDS="${BATCH_INTERVAL_SECONDS:-$(dotenv_or_default BATCH_INTERVAL_SECONDS 300)}"
+UNIFORM_DELTA="${UNIFORM_DELTA:-$(dotenv_or_default UNIFORM_DELTA 10.0)}"
+SWEEP_ID="${SWEEP_ID:-$(dotenv_or_default SWEEP_ID sweep01)}"
+IS_SWEEP="${IS_SWEEP:-$(dotenv_or_default IS_SWEEP false)}"
+SWEEP_SIZE="${SWEEP_SIZE:-$(dotenv_or_default SWEEP_SIZE 0)}"
+REDUCED_SWEEP="${REDUCED_SWEEP:-$(dotenv_or_default REDUCED_SWEEP false)}"
+ML_READY_TIMEOUT_SECONDS="${ML_READY_TIMEOUT_SECONDS:-$(dotenv_or_default ML_READY_TIMEOUT_SECONDS 180)}"
 DB_WRITE_BATCH_SIZE="${DB_WRITE_BATCH_SIZE:-1}"
 KEEP_STACK="${KEEP_STACK:-0}"
 SUMMARY_FILE="${SUMMARY_FILE:-}"
@@ -66,12 +83,16 @@ services:
     environment:
       SUPPRESSION_MODE: "$mode"
       RUN_ID: "$run_id"
-      DATASET_PRESET: "custom"
+      DATASET_PRESET: "$DATASET_PRESET"
       DATA_WINDOW: "$DATA_WINDOW"
       REPLAY_SPEED: "$REPLAY_SPEED"
       HOUSE_IDS: '$HOUSE_IDS_JSON'
+      ONE_HOUSE_ID: "$ONE_HOUSE_ID"
+      FIVE_HOUSE_IDS: '$FIVE_HOUSE_IDS_JSON'
       DATA_FILE: "$DATA_FILE"
       DATA_GLOB: "$DATA_GLOB"
+      STREAM_READ_CHUNK_SIZE: "$STREAM_READ_CHUNK_SIZE"
+      PROPERTY_FILTER: "$PROPERTY_FILTER"
       EPSILON_H: "$EPSILON_H"
       SWEEP_ID: "$SWEEP_ID"
       IS_SWEEP: "$IS_SWEEP"
@@ -96,12 +117,15 @@ services:
     environment:
       SUPPRESSION_MODE: "$mode"
       RUN_ID: "$run_id"
-      DATASET_PRESET: "custom"
+      DATASET_PRESET: "$DATASET_PRESET"
       DATA_WINDOW: "$DATA_WINDOW"
       REPLAY_SPEED: "$REPLAY_SPEED"
       HOUSE_IDS: '$HOUSE_IDS_JSON'
+      ONE_HOUSE_ID: "$ONE_HOUSE_ID"
+      FIVE_HOUSE_IDS: '$FIVE_HOUSE_IDS_JSON'
       DATA_FILE: "$DATA_FILE"
       DATA_GLOB: "$DATA_GLOB"
+      PROPERTY_FILTER: "$PROPERTY_FILTER"
       EPSILON_H: "$EPSILON_H"
       SWEEP_ID: "$SWEEP_ID"
       IS_SWEEP: "$IS_SWEEP"
@@ -154,6 +178,22 @@ stop_python_services() {
   "${COMPOSE[@]}" rm -f simulator aggregator ml-hiereb >/dev/null 2>&1 || true
 }
 
+wait_for_ml_ready() {
+  local deadline=$((SECONDS + ML_READY_TIMEOUT_SECONDS))
+  local ml_logs=""
+  until {
+    ml_logs="$("${COMPOSE[@]}" logs --no-color --tail=500 ml-hiereb 2>/dev/null || true)"
+    grep -q "predictions_published" <<< "$ml_logs"
+  }; do
+    if (( SECONDS >= deadline )); then
+      echo "ASSERTION FAILED: ml-hiereb did not publish predictions within ${ML_READY_TIMEOUT_SECONDS}s" >&2
+      "${COMPOSE[@]}" logs --no-color --tail=200 ml-hiereb >&2 || true
+      exit 1
+    fi
+    sleep 2
+  done
+}
+
 run_mode() {
   local mode="$1"
   local run_id="${RUN_ID_OVERRIDE:-}"
@@ -171,9 +211,9 @@ run_mode() {
 
   "${COMPOSE[@]}" up -d --build aggregator
 
-  if [[ "$mode" == "hiereb" ]]; then
+  if [[ "$mode" != "full_tx" ]]; then
     "${COMPOSE[@]}" up -d --build ml-hiereb
-    sleep 3
+    wait_for_ml_ready
   fi
 
   "${COMPOSE[@]}" up -d --build simulator
@@ -202,8 +242,9 @@ run_mode() {
       assert_float_lt "$avg_tr" "0.999" "uniform mode should suppress at least some readings"
       ;;
     hiereb)
-      "${COMPOSE[@]}" logs --no-color --tail=500 ml-hiereb | grep -q "predictions_published"
-      "${COMPOSE[@]}" logs --no-color --tail=500 ml-hiereb | grep -q "thresholds_published"
+      ml_logs="$("${COMPOSE[@]}" logs --no-color --tail=500 ml-hiereb 2>/dev/null || true)"
+      grep -q "predictions_published" <<< "$ml_logs"
+      grep -q "thresholds_published" <<< "$ml_logs"
       assert_float_lt "$avg_tr" "0.999" "hiereb mode should suppress after thresholds arrive"
       ;;
     *)

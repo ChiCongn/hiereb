@@ -17,8 +17,8 @@ Ket qua can trinh bay:
 - Transmission Rate (`tr`): ty le plug that su truyen du lieu. Cang thap thi cang tiet kiem bang thong/nang luong.
 - RMSE: sai so tong quat cua house-level load.
 - `e_h`: house error theo tung timestamp.
-- P90 `|e_h|`: sai so duoi nguong 90% mau.
-- Bieu do `Actual vs Predicted Load`, `Transmission Rate Trend`, `Rolling RMSE`.
+- P95 `|e_h|`: sai so duoi nguong 95% mau.
+- Bieu do `Actual vs Reconstructed Load`, `Transmission Rate Trend`, `Rolling RMSE`.
 
 ## 2. Chuan Bi Truoc Demo
 
@@ -45,6 +45,81 @@ Neu da co `.env` roi thi khong can copy lai. Cac bien quan trong:
 - `REPLAY_SPEED`: toc do replay.
 - `EPSILON_H`: budget sai so house; `0.05` nghia la 5% mean house load.
 - `TAU`: chu ky reallocation cua HierEB theo data-time seconds.
+- `DATASET_PRESET`: `one_house`, `five_houses`, `all_house`, hoac `custom`.
+- `DATA_WINDOW`: `one_day`, `five_days`, `a_week`, hoac `all`.
+- `STREAM_READ_CHUNK_SIZE`: so row giu trong RAM tren moi file house khi replay.
+
+### Chuan bi data nhieu house
+
+Khong nen de simulator doc truc tiep file `all-house` lon. Tach tung cua so
+thoi gian thanh mot file cho moi house bang lenh streaming sau:
+
+```bash
+python scripts/partition_debs_by_house.py \
+  --input data/all-house/one-day.csv \
+  --output-dir data/partitioned/one-day \
+  --property 1
+```
+
+Neu data goc da tach san thanh `data/house-*.csv`, tao partition mot ngay cho
+tat ca house dang co bang lenh:
+
+```bash
+python scripts/partition_debs_by_house.py \
+  --input data/house-*.csv \
+  --output-dir data/partitioned/one-day \
+  --property 1 --max-duration-seconds 86400 --skip-malformed --overwrite
+```
+
+`--skip-malformed` duoc dung vi bo du lieu local hien co mot dong hong dinh
+dang trong `data/house-16.csv`; so dong bo qua duoc ghi vao `manifest.json`.
+
+Tuong tu cho cua so lon hon:
+
+```bash
+python scripts/partition_debs_by_house.py \
+  --input data/all-house/five-days.csv \
+  --output-dir data/partitioned/five-days \
+  --property 1
+
+python scripts/partition_debs_by_house.py \
+  --input data/all-house/a-week.csv \
+  --output-dir data/partitioned/a-week \
+  --property 1
+```
+
+Simulator se doc tung partition va merge theo timestamp, khong `concat` toan
+bo 40 house vao mot DataFrame. ML-HierEB fit tung partition lan luot.
+
+Vi du `.env` de chay mot house:
+
+```env
+DATASET_PRESET=one_house
+DATA_WINDOW=one_day
+ONE_HOUSE_ID=1
+```
+
+Vi du `.env` de chay nam house:
+
+```env
+DATASET_PRESET=five_houses
+DATA_WINDOW=one_day
+FIVE_HOUSE_IDS=[0,1,2,10,11]
+```
+
+Vi du `.env` de chay tat ca partition da tao:
+
+```env
+DATASET_PRESET=all_house
+DATA_WINDOW=one_day
+```
+
+Chay kiem tra mode `hiereb` theo preset da chon:
+
+```bash
+DATASET_PRESET=five_houses DATA_WINDOW=one_day \
+FIVE_HOUSE_IDS='[0,1,2,10,11]' bash scripts/verify_e2e.sh hiereb
+```
 
 ## 3. Demo Nhanh Mot Lenh
 
@@ -78,8 +153,8 @@ Trong dashboard, chon `run_id` va `house_id` o dau trang. Nen demo theo thu tu:
 
 1. Chon run `full_tx`: chi ra `Average TR` gan `1.0`, tuc la truyen toan bo.
 2. Chon run `uniform`: chi ra `Average TR` giam, day la baseline suppression don gian.
-3. Chon run `hiereb`: chi ra `Average TR`, `RMSE`, `P90 |e_h|`, va trend theo thoi gian.
-4. Mo panel `Actual vs Predicted Load` de noi ve du bao.
+3. Chon run `hiereb`: chi ra `Average TR`, `RMSE`, `P95 |e_h|`, va trend theo thoi gian.
+4. Mo panel `Actual vs Reconstructed Load` de noi ve reconstruction.
 5. Mo panel `Transmission Rate Trend` de noi ve muc giam truyen.
 6. Mo panel `Rolling RMSE (1 minute)` de noi ve trade-off giua tiet kiem truyen va sai so.
 
@@ -107,7 +182,7 @@ Cac file quan trong:
 - `charts/chart_rmse.svg`: bieu do RMSE theo mode.
 - `charts/chart_tr_1m_comparison.svg`: trend transmission rate.
 - `charts/chart_rmse_1m_comparison.svg`: trend RMSE.
-- `charts/chart_actual_vs_pred_<RUN_ID>.svg`: actual vs predicted cho tung run.
+- `charts/chart_actual_vs_reconstructed_<RUN_ID>.svg`: actual vs reconstructed cho tung run.
 
 ## 5. Inspect Toan He Thong
 
@@ -179,7 +254,7 @@ No in ra:
 - Version database.
 - Danh sach table.
 - Danh sach hypertable.
-- `run_summary`: rows, avg TR, RMSE, P90, max error.
+- `run_summary`: rows, avg TR, RMSE, P95, max error.
 - 10 rows metric moi nhat.
 - Tong quan `threshold_log`.
 - Log database.
@@ -332,7 +407,7 @@ bash scripts/inspect_demo_artifacts.sh
 Ket luan bang metric:
 
 ```text
-full_tx la baseline truyen 100%. uniform va hiereb giam transmission rate. Diem can danh gia la trade-off giua avg TR va RMSE/P90 error.
+full_tx la baseline truyen 100%. uniform va hiereb giam transmission rate. Diem can danh gia la trade-off giua avg TR va RMSE/P95 error.
 ```
 
 Nhan xet senior nen noi thang:
