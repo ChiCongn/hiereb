@@ -58,6 +58,17 @@ class Settings(BaseSettings):
     # EPSILON_H/Delta_H divided by active plugs; it must not read this value.
     UNIFORM_DELTA: float = Field(default=10.0)
     RUN_ID: str = Field(default="default")         # experiment/run namespace for DB rows
+    SWEEP_ID: str = Field(default="sweep01")
+    SWEEP_EPSILON_RATIO_VALUES: list[float] = Field(
+        default_factory=lambda: [0.01, 0.02, 0.05, 0.10, 0.20]
+    )
+    SWEEP_REDUCED_EPSILON_RATIO_VALUES: list[float] = Field(
+        default_factory=lambda: [0.02, 0.05, 0.10]
+    )
+    IS_SWEEP: bool = Field(default=False)
+    SWEEP_SIZE: int = Field(default=0)
+    REDUCED_SWEEP: bool = Field(default=False)
+    EPSILON_RATIO: float | None = Field(default=None)
     TRAINING_DAYS: int = Field(default=7)          # <=0 means use all loaded data
     # Prediction granularity for time-slice median. 300 = 5-minute bins.
     PREDICTOR_BIN_SECONDS: int = Field(default=300)

@@ -40,7 +40,7 @@ Quy tắc cập nhật:
 | P04B | `done` | Prompt 05 | HierEB allocator budget/timing/sigma_floor | `2026-06-05T21:52:45+07:00`; allocator/ML tests `30 passed`; full pytest `143 passed` |
 | P05 | `done` | Prompt 06 | Sáu CSV output đúng schema | `2026-06-06T08:10:49+07:00`; export/aggregator tests `15 passed`; full pytest `147 passed` |
 | P06 | `done` | Prompt 07 | Rolling metrics và summary metrics | `2026-06-06T08:15:16+07:00`; metrics/export tests `18 passed`; full pytest `150 passed` |
-| P07 | `todo` | Prompt 08 | Sweep runner và metadata `run_id` | Chưa có |
+| P07 | `done` | Prompt 08 | Sweep runner và metadata `run_id` | `2026-06-06T08:40:59+07:00`; runner tests `5 passed`; full pytest `155 passed` |
 | P08 | `todo` | Prompt 09 | Pareto SVG và dashboard update | Chưa có |
 | P09 | `todo` | Prompt 10 | Final docs cleanup và verification run | Chưa có |
 | P10 | `todo` | Prompt 10 | Tick verification checklist cuối cùng | Chưa có |
@@ -69,7 +69,7 @@ Trạng thái tài liệu điều phối:
 | P1-04 | P1 | `todo` | P04A/P04B | Inactive plug và reactivation không phá budget | `pytest tests/test_allocator.py tests/test_plug_state.py -q` | Active set cần rõ |
 | P1-05 | P1 | `done` | P06 | Rolling metrics tính theo event-time window | `pytest tests/test_csv_exporter.py tests/test_aggregator.py -q` | Cửa sổ `(t - 3600, t]`, min 60 timestamp |
 | P1-06 | P1 | `done` | P05 | Export đủ 6 CSV bắt buộc: experiment_runs, event_decisions, house_timeseries, plug_metrics, house_summary, threshold_trace | `pytest tests/test_csv_exporter.py -q` | Schema ổn định bằng `CSV_SCHEMAS` |
-| P2-01 | P2 | `todo` | P07 | Sweep runner có config grid và metadata `run_id` | `pytest tests/test_experiment_runner.py -q` | Dùng để so sánh Pareto |
+| P2-01 | P2 | `done` | P07 | Sweep runner có config grid và metadata `run_id` | `.venv/bin/python -m pytest tests/test_experiment_runner.py -q` | Dùng để so sánh Pareto |
 | P2-02 | P2 | `todo` | P08 | Có SVG Pareto/transmission/RMSE từ output CSV | `pytest tests/test_dashboard.py -q` | Nếu không có test UI, ghi smoke evidence |
 | P2-03 | P2 | `todo` | P08 | Dashboard hiển thị `P95`, `Delta_H`, `sigma_floor`, `active_plug_count` | `pytest tests/test_dashboard.py -q` | Post-hoc là đủ |
 | P2-04 | P2 | `done` | P06 | Plug metrics có `event_count`, `transmitted_count`, `suppressed_count`, `missing_prediction_count` | `pytest tests/test_csv_exporter.py -q` | Đã test tách reconstruction/prediction metrics |
@@ -280,12 +280,37 @@ Baseline phải được ghi sau khi chạy Prompt 00.
 
 ### P07 - Sweep runner
 
-- Trạng thái: `todo`
-- File dự kiến: runner/config/script hiện có, `tests/test_experiment_runner.py`
-- Test đã chạy: chưa có
-- Kết quả: chưa có
+- Trạng thái: `done`
+- File đã sửa: `config/settings.py`, `scripts/run_sweep.py`,
+  `scripts/run_sweep.sh`, `scripts/verify_e2e.sh`, `README.md`,
+  `tests/test_experiment_runner.py`
+- Test đã chạy:
+  - `python3 -m compileall config scripts/run_sweep.py tests/test_experiment_runner.py`
+  - `.venv/bin/python -m pytest tests/test_experiment_runner.py -q`
+  - `bash scripts/run_sweep.sh --dry-run --format json --sweep-id sweep01 --house-id 0`
+  - `.venv/bin/python -m pytest tests/test_experiment_runner.py tests/test_csv_exporter.py -q`
+  - `.venv/bin/python -m pytest -q`
+  - `bash scripts/run_sweep.sh --dry-run --format csv --reduced --sweep-id sweep01 --house-id 0`
+  - `bash -n scripts/verify_e2e.sh`
+  - `bash -n scripts/run_sweep.sh`
+  - `rg -n "SWEEP_EPSILON_RATIO_VALUES|SWEEP_REDUCED_EPSILON_RATIO_VALUES|sweep01_hiereb_house0_eps005|reduced_sweep|run_sweep" config scripts tests README.md`
+- Kết quả:
+  - Compile: pass.
+  - Runner tests: `5 passed in 0.34s`.
+  - Runner/export related tests: `12 passed in 0.40s`.
+  - Full suite: `155 passed in 1.12s`.
+  - Dry-run JSON sinh 11 run mặc định, gồm `sweep01_hiereb_house0_eps005`.
+  - Dry-run CSV reduced sinh 7 run với `sweep_size=3`, `reduced_sweep=true`.
+- Acceptance evidence:
+  - Default sweep grid là `[0.01, 0.02, 0.05, 0.10, 0.20]`.
+  - Reduced sweep grid là `[0.02, 0.05, 0.10]` với `reduced_sweep=true`.
+  - `full_tx` chạy một lần, `epsilon_ratio=null`, `is_sweep=false`.
+  - `uniform` và `hiereb` chạy một lần cho mỗi epsilon.
+  - Run ID epsilon dùng format `{sweep_id}_{mode}_house{house_id}_eps{epsilon_ratio_x100}`; test khóa ví dụ `sweep01_hiereb_house0_eps005`.
+  - Runner ghi metadata `sweep_id`, `is_sweep`, `sweep_size`, `reduced_sweep` trong JSON/CSV plan.
+  - `scripts/verify_e2e.sh` nhận `RUN_ID_OVERRIDE` để sweep thật có run id deterministic.
 - Blocker: không có
-- Next step: chờ P06 done
+- Next step: chạy Prompt 09 để tạo Pareto SVG và dashboard update
 
 ### P08 - Pareto SVG và dashboard
 
@@ -631,6 +656,47 @@ Baseline phải được ghi sau khi chạy Prompt 00.
   - Không có.
 - Next step:
   - Chạy Prompt 08 để thêm sweep runner và metadata `run_id`.
+
+### 2026-06-06T08:40:59+07:00 - Phase P07: Sweep runner
+
+- Trạng thái: `done`
+- File đã sửa:
+  - `config/settings.py`
+  - `scripts/run_sweep.py`
+  - `scripts/run_sweep.sh`
+  - `scripts/verify_e2e.sh`
+  - `README.md`
+  - `tests/test_experiment_runner.py`
+  - `docs/requirments/hiereb_completion_progress_log.md`
+- Lệnh đã chạy:
+  - `python3 -m compileall config scripts/run_sweep.py tests/test_experiment_runner.py`
+  - `.venv/bin/python -m pytest tests/test_experiment_runner.py -q`
+  - `bash scripts/run_sweep.sh --dry-run --format json --sweep-id sweep01 --house-id 0`
+  - `.venv/bin/python -m pytest tests/test_experiment_runner.py tests/test_csv_exporter.py -q`
+  - `.venv/bin/python -m pytest -q`
+  - `bash scripts/run_sweep.sh --dry-run --format csv --reduced --sweep-id sweep01 --house-id 0`
+  - `bash -n scripts/verify_e2e.sh`
+  - `bash -n scripts/run_sweep.sh`
+  - `rg -n "SWEEP_EPSILON_RATIO_VALUES|SWEEP_REDUCED_EPSILON_RATIO_VALUES|sweep01_hiereb_house0_eps005|reduced_sweep|run_sweep" config scripts tests README.md`
+- Kết quả:
+  - Compile: pass.
+  - Runner tests: `5 passed in 0.34s`.
+  - Runner/export related tests: `12 passed in 0.40s`.
+  - Full suite: `155 passed in 1.12s`.
+  - Dry-run JSON mặc định sinh 11 run deterministic.
+  - Dry-run CSV reduced sinh 7 run deterministic.
+  - Shell syntax check: pass.
+- Acceptance evidence:
+  - Có runner sinh plan deterministic mà không start Docker.
+  - Có wrapper `scripts/run_sweep.sh` và mode execute gọi `scripts/verify_e2e.sh`.
+  - `full_tx` chạy một lần với `epsilon_ratio=null`, `is_sweep=false`.
+  - `uniform` và `hiereb` chạy theo từng epsilon mặc định hoặc reduced.
+  - Metadata `sweep_id`, `is_sweep`, `sweep_size`, `reduced_sweep` được ghi trong plan.
+  - `RUN_ID_OVERRIDE` cho phép sweep thật giữ run id deterministic.
+- Blocker:
+  - Không có.
+- Next step:
+  - Chạy Prompt 09 để tạo Pareto SVG và dashboard update.
 
 ## 7. Mẫu log cho các lần cập nhật sau
 

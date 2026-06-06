@@ -7,6 +7,7 @@
 #
 # Useful overrides:
 #   E2E_RUNTIME_SECONDS=45 bash scripts/verify_e2e.sh hiereb
+#   RUN_ID_OVERRIDE=sweep01_hiereb_house0_eps005 bash scripts/verify_e2e.sh hiereb
 #   KEEP_STACK=1 bash scripts/verify_e2e.sh
 
 set -euo pipefail
@@ -25,6 +26,10 @@ EPSILON_H="${EPSILON_H:-0.05}"
 TAU="${TAU:-300}"
 BATCH_INTERVAL_SECONDS="${BATCH_INTERVAL_SECONDS:-300}"
 UNIFORM_DELTA="${UNIFORM_DELTA:-10.0}"
+SWEEP_ID="${SWEEP_ID:-sweep01}"
+IS_SWEEP="${IS_SWEEP:-false}"
+SWEEP_SIZE="${SWEEP_SIZE:-0}"
+REDUCED_SWEEP="${REDUCED_SWEEP:-false}"
 DB_WRITE_BATCH_SIZE="${DB_WRITE_BATCH_SIZE:-1}"
 KEEP_STACK="${KEEP_STACK:-0}"
 SUMMARY_FILE="${SUMMARY_FILE:-}"
@@ -68,6 +73,10 @@ services:
       DATA_FILE: "$DATA_FILE"
       DATA_GLOB: "$DATA_GLOB"
       EPSILON_H: "$EPSILON_H"
+      SWEEP_ID: "$SWEEP_ID"
+      IS_SWEEP: "$IS_SWEEP"
+      SWEEP_SIZE: "$SWEEP_SIZE"
+      REDUCED_SWEEP: "$REDUCED_SWEEP"
       TAU: "$TAU"
       BATCH_INTERVAL_SECONDS: "$BATCH_INTERVAL_SECONDS"
       UNIFORM_DELTA: "$UNIFORM_DELTA"
@@ -76,6 +85,10 @@ services:
   aggregator:
     environment:
       RUN_ID: "$run_id"
+      SWEEP_ID: "$SWEEP_ID"
+      IS_SWEEP: "$IS_SWEEP"
+      SWEEP_SIZE: "$SWEEP_SIZE"
+      REDUCED_SWEEP: "$REDUCED_SWEEP"
       DB_WRITE_BATCH_SIZE: "$DB_WRITE_BATCH_SIZE"
       LOG_LEVEL: INFO
 
@@ -90,6 +103,10 @@ services:
       DATA_FILE: "$DATA_FILE"
       DATA_GLOB: "$DATA_GLOB"
       EPSILON_H: "$EPSILON_H"
+      SWEEP_ID: "$SWEEP_ID"
+      IS_SWEEP: "$IS_SWEEP"
+      SWEEP_SIZE: "$SWEEP_SIZE"
+      REDUCED_SWEEP: "$REDUCED_SWEEP"
       TAU: "$TAU"
       BATCH_INTERVAL_SECONDS: "$BATCH_INTERVAL_SECONDS"
       LOG_LEVEL: INFO
@@ -139,7 +156,13 @@ stop_python_services() {
 
 run_mode() {
   local mode="$1"
-  local run_id="e2e_${mode}_$(date +%Y%m%d%H%M%S)"
+  local run_id="${RUN_ID_OVERRIDE:-}"
+  if [[ -z "$run_id" ]]; then
+    run_id="${RUN_ID:-}"
+  fi
+  if [[ -z "$run_id" ]]; then
+    run_id="e2e_${mode}_$(date +%Y%m%d%H%M%S)"
+  fi
 
   echo ""
   echo "=== Running E2E mode: $mode (RUN_ID=$run_id) ==="
