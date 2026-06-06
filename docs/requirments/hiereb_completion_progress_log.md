@@ -39,7 +39,7 @@ Quy tắc cập nhật:
 | P04A | `done` | Prompt 04 | Uniform active-budget baseline | `2026-06-05T21:31:39+07:00`; related tests `32 passed`; full pytest `132 passed` |
 | P04B | `done` | Prompt 05 | HierEB allocator budget/timing/sigma_floor | `2026-06-05T21:52:45+07:00`; allocator/ML tests `30 passed`; full pytest `143 passed` |
 | P05 | `done` | Prompt 06 | Sáu CSV output đúng schema | `2026-06-06T08:10:49+07:00`; export/aggregator tests `15 passed`; full pytest `147 passed` |
-| P06 | `todo` | Prompt 07 | Rolling metrics và summary metrics | Chưa có |
+| P06 | `done` | Prompt 07 | Rolling metrics và summary metrics | `2026-06-06T08:15:16+07:00`; metrics/export tests `18 passed`; full pytest `150 passed` |
 | P07 | `todo` | Prompt 08 | Sweep runner và metadata `run_id` | Chưa có |
 | P08 | `todo` | Prompt 09 | Pareto SVG và dashboard update | Chưa có |
 | P09 | `todo` | Prompt 10 | Final docs cleanup và verification run | Chưa có |
@@ -67,12 +67,12 @@ Trạng thái tài liệu điều phối:
 | P1-02 | P1 | `done` | P04B | `sigma_floor` cố định từ warm-up toàn house | `pytest tests/test_allocator.py -q` | Không dùng percentile runtime |
 | P1-03 | P1 | `done` | P04B | Threshold update có `threshold_version` và `effective_after_time` | `pytest tests/test_allocator.py tests/test_simulator_main.py -q` | Tránh retroactive decision |
 | P1-04 | P1 | `todo` | P04A/P04B | Inactive plug và reactivation không phá budget | `pytest tests/test_allocator.py tests/test_plug_state.py -q` | Active set cần rõ |
-| P1-05 | P1 | `todo` | P06 | Rolling metrics tính theo event-time window | `pytest tests/test_aggregator.py -q` | Cửa sổ 1 giờ nếu không có yêu cầu khác |
+| P1-05 | P1 | `done` | P06 | Rolling metrics tính theo event-time window | `pytest tests/test_csv_exporter.py tests/test_aggregator.py -q` | Cửa sổ `(t - 3600, t]`, min 60 timestamp |
 | P1-06 | P1 | `done` | P05 | Export đủ 6 CSV bắt buộc: experiment_runs, event_decisions, house_timeseries, plug_metrics, house_summary, threshold_trace | `pytest tests/test_csv_exporter.py -q` | Schema ổn định bằng `CSV_SCHEMAS` |
 | P2-01 | P2 | `todo` | P07 | Sweep runner có config grid và metadata `run_id` | `pytest tests/test_experiment_runner.py -q` | Dùng để so sánh Pareto |
 | P2-02 | P2 | `todo` | P08 | Có SVG Pareto/transmission/RMSE từ output CSV | `pytest tests/test_dashboard.py -q` | Nếu không có test UI, ghi smoke evidence |
 | P2-03 | P2 | `todo` | P08 | Dashboard hiển thị `P95`, `Delta_H`, `sigma_floor`, `active_plug_count` | `pytest tests/test_dashboard.py -q` | Post-hoc là đủ |
-| P2-04 | P2 | `todo` | P06 | Plug metrics có `event_count`, `transmitted_count`, `suppressed_count`, `missing_prediction_count` | `pytest tests/test_aggregator.py tests/test_exports.py -q` | Cần cho audit |
+| P2-04 | P2 | `done` | P06 | Plug metrics có `event_count`, `transmitted_count`, `suppressed_count`, `missing_prediction_count` | `pytest tests/test_csv_exporter.py -q` | Đã test tách reconstruction/prediction metrics |
 
 ## 4. Baseline
 
@@ -256,13 +256,27 @@ Baseline phải được ghi sau khi chạy Prompt 00.
 
 ### P06 - Rolling và summary metrics
 
-- Trạng thái: `todo`
-- File dự kiến: `src/aggregator/main.py`, `src/aggregator/db_writer.py`,
-  export scripts/module hiện có, `tests/test_aggregator.py`, `tests/test_exports.py`
-- Test đã chạy: chưa có
-- Kết quả: chưa có
+- Trạng thái: `done`
+- File đã sửa: `src/aggregator/csv_exporter.py`, `tests/test_csv_exporter.py`
+- Test đã chạy:
+  - `python3 -m compileall src/aggregator tests/test_csv_exporter.py`
+  - `.venv/bin/python -m pytest tests/test_csv_exporter.py tests/test_aggregator.py -q`
+  - `.venv/bin/python -m pytest -q`
+  - `rg -n "rolling_insufficient_data|ROLLING_MIN_VALID_TIMESTAMPS|ROLLING_WINDOW_SECONDS|rmse_house_error|p95_abs_house_error|full_tx" src/aggregator tests/test_csv_exporter.py tests/test_aggregator.py`
+- Kết quả:
+  - Compile: pass.
+  - Metrics/export tests: `18 passed in 0.17s`.
+  - Full suite: `150 passed in 0.78s`.
+  - `rg` verification: thấy constants/tests liên quan rolling, P95/RMSE và full_tx.
+- Acceptance evidence:
+  - Rolling window dùng event-time seconds với cửa sổ `(t - 3600, t]`; event đúng biên `t - 3600` bị loại.
+  - `rolling_insufficient_data = true` khi cửa sổ có dưới `60` timestamp hợp lệ.
+  - Test fixture timestamp không đều chứng minh rolling RMSE tính theo event-time, không theo số row cố định hoặc wall-clock.
+  - `house_summary.csv` tính `MAE_H`, `RMSE_H`, `P95_H`, `MAX_H` trên `E_H(t)`.
+  - `plug_metrics.csv` tách `rmse_reconstruction`/`mae_reconstruction` và `rmse_prediction`/`mae_prediction`.
+  - `full_tx` reconstruction RMSE/MAE bằng `0`, trong khi prediction RMSE/MAE vẫn được ghi riêng.
 - Blocker: không có
-- Next step: chờ P05 đủ schema
+- Next step: chạy Prompt 08 để thêm sweep runner và metadata `run_id`
 
 ### P07 - Sweep runner
 
@@ -588,6 +602,35 @@ Baseline phải được ghi sau khi chạy Prompt 00.
   - Không có.
 - Next step:
   - Chạy Prompt 07 để mở rộng rolling/summary metrics runtime nếu cần.
+
+### 2026-06-06T08:15:16+07:00 - Phase P06: Rolling và summary metrics
+
+- Trạng thái: `done`
+- File đã sửa:
+  - `src/aggregator/csv_exporter.py`
+  - `tests/test_csv_exporter.py`
+  - `docs/requirments/hiereb_completion_progress_log.md`
+- Lệnh đã chạy:
+  - `python3 -m compileall src/aggregator tests/test_csv_exporter.py`
+  - `.venv/bin/python -m pytest tests/test_csv_exporter.py tests/test_aggregator.py -q`
+  - `.venv/bin/python -m pytest -q`
+  - `rg -n "rolling_insufficient_data|ROLLING_MIN_VALID_TIMESTAMPS|ROLLING_WINDOW_SECONDS|rmse_house_error|p95_abs_house_error|full_tx" src/aggregator tests/test_csv_exporter.py tests/test_aggregator.py`
+- Kết quả:
+  - Compile: pass.
+  - Metrics/export tests: `18 passed in 0.17s`.
+  - Full suite: `150 passed in 0.78s`.
+  - `rg` verification: có constants và tests cho rolling event-time, P95/RMSE và full_tx.
+- Acceptance evidence:
+  - Rolling metrics dùng cửa sổ event-time `(t - 3600, t]`, không dùng row-count hoặc wall-clock.
+  - `rolling_insufficient_data` dựa trên số timestamp hợp lệ trong window: `< 60`.
+  - Test có fixture timestamp không đều và event biên `t - 3600` với error lớn để chứng minh boundary bị loại.
+  - Summary metrics tính `RMSE_H`, `MAE_H`, `P95_H`, `MAX_H` trên `E_H(t)`.
+  - Plug metrics tách reconstruction và prediction metrics.
+  - `full_tx` reconstruction RMSE/MAE bằng `0`, prediction error vẫn tách riêng.
+- Blocker:
+  - Không có.
+- Next step:
+  - Chạy Prompt 08 để thêm sweep runner và metadata `run_id`.
 
 ## 7. Mẫu log cho các lần cập nhật sau
 

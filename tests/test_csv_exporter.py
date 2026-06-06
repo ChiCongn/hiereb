@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -236,7 +237,7 @@ def test_required_csv_export_contains_special_columns_and_metrics(tmp_path: Path
     last_house_row = house_timeseries[-1]
     assert last_house_row["rolling_tr_1h"] != ""
     assert last_house_row["rolling_rmse_1h"] != ""
-    assert last_house_row["rolling_insufficient_data"] == "false"
+    assert last_house_row["rolling_insufficient_data"] == "true"
 
     plug_metrics = _read_csv(tmp_path / "plug_metrics.csv")
     plug_1 = next(row for row in plug_metrics if row["plug_uid"] == "100001")
@@ -281,3 +282,178 @@ def test_required_csv_cli_exports_fixture(tmp_path: Path):
 
     assert "event_decisions.csv" in result.stdout
     assert sorted(path.name for path in output_dir.glob("*.csv")) == sorted(CSV_SCHEMAS)
+
+
+def test_rolling_metrics_use_event_time_window_with_irregular_timestamps(tmp_path: Path):
+    timestamps = [0, 10, 1000]
+    timestamps.extend(1001 + (idx * 47) for idx in range(77))
+    timestamps.append(4600)
+    timestamps = sorted(set(timestamps))
+    errors_by_timestamp = {
+        timestamp: (1000.0 if timestamp <= 1000 else float((idx % 7) - 3))
+        for idx, timestamp in enumerate(timestamps)
+    }
+    events = [
+        {
+            "timestamp": timestamp,
+            "source_timestamp": timestamp,
+            "house_id": 1,
+            "household_id": 0,
+            "plug_id": 1,
+            "plug_uid": 100001,
+            "actual_load": 100.0 + errors_by_timestamp[timestamp],
+            "predicted_load": 100.0,
+            "reconstructed_load": 100.0,
+            "transmitted": False,
+            "decision": "suppress",
+            "reason": "normal",
+            "plug_status": "active",
+            "is_forced_transmit": False,
+            "threshold": 10.0,
+            "residual": errors_by_timestamp[timestamp],
+            "abs_residual": abs(errors_by_timestamp[timestamp]),
+        }
+        for timestamp in timestamps
+    ]
+    artifact = _fixture_artifact()
+    artifact["event_decisions"] = events
+
+    export_required_csvs_from_artifact(artifact, tmp_path)
+
+    rows = _read_csv(tmp_path / "house_timeseries.csv")
+    last_row = rows[-1]
+    included_errors = [
+        error
+        for timestamp, error in errors_by_timestamp.items()
+        if 4600 - 3600 < timestamp <= 4600
+    ]
+    expected_rmse = math.sqrt(sum(error * error for error in included_errors) / len(included_errors))
+
+    assert len(included_errors) >= 60
+    assert errors_by_timestamp[1000] == 1000.0
+    assert last_row["rolling_insufficient_data"] == "false"
+    assert float(last_row["rolling_rmse_1h"]) == pytest.approx(expected_rmse)
+    assert float(last_row["rolling_rmse_1h"]) < 10.0
+
+
+def test_summary_and_plug_metrics_are_correct_on_house_error(tmp_path: Path):
+    artifact = _fixture_artifact()
+    artifact["experiment"]["mode"] = "uniform"
+    artifact["event_decisions"] = [
+        {
+            "timestamp": 1000,
+            "source_timestamp": 1000,
+            "house_id": 1,
+            "household_id": 0,
+            "plug_id": 1,
+            "plug_uid": 100001,
+            "actual_load": 10.0,
+            "predicted_load": 8.0,
+            "reconstructed_load": 8.0,
+            "transmitted": False,
+            "decision": "suppress",
+            "reason": "normal",
+            "plug_status": "active",
+            "is_forced_transmit": False,
+            "threshold": 5.0,
+            "residual": 2.0,
+            "abs_residual": 2.0,
+        },
+        {
+            "timestamp": 2000,
+            "source_timestamp": 2000,
+            "house_id": 1,
+            "household_id": 0,
+            "plug_id": 1,
+            "plug_uid": 100001,
+            "actual_load": 20.0,
+            "predicted_load": 16.0,
+            "reconstructed_load": 16.0,
+            "transmitted": False,
+            "decision": "suppress",
+            "reason": "normal",
+            "plug_status": "active",
+            "is_forced_transmit": False,
+            "threshold": 5.0,
+            "residual": 4.0,
+            "abs_residual": 4.0,
+        },
+        {
+            "timestamp": 3000,
+            "source_timestamp": 3000,
+            "house_id": 1,
+            "household_id": 0,
+            "plug_id": 1,
+            "plug_uid": 100001,
+            "actual_load": 30.0,
+            "predicted_load": 24.0,
+            "reconstructed_load": 24.0,
+            "transmitted": False,
+            "decision": "suppress",
+            "reason": "normal",
+            "plug_status": "active",
+            "is_forced_transmit": False,
+            "threshold": 5.0,
+            "residual": 6.0,
+            "abs_residual": 6.0,
+        },
+    ]
+
+    export_required_csvs_from_artifact(artifact, tmp_path)
+
+    summary = _read_csv(tmp_path / "house_summary.csv")[0]
+    plug = _read_csv(tmp_path / "plug_metrics.csv")[0]
+    errors = [2.0, 4.0, 6.0]
+    rmse = math.sqrt(sum(error * error for error in errors) / len(errors))
+
+    assert float(summary["rmse_house_error"]) == pytest.approx(rmse)
+    assert float(summary["mae_house_error"]) == pytest.approx(4.0)
+    assert float(summary["p95_abs_house_error"]) == pytest.approx(5.8)
+    assert float(summary["max_abs_house_error"]) == pytest.approx(6.0)
+    assert float(plug["rmse_reconstruction"]) == pytest.approx(rmse)
+    assert float(plug["mae_reconstruction"]) == pytest.approx(4.0)
+    assert float(plug["rmse_prediction"]) == pytest.approx(rmse)
+    assert float(plug["mae_prediction"]) == pytest.approx(4.0)
+
+
+def test_full_tx_reconstruction_rmse_is_zero_while_prediction_error_is_separate(tmp_path: Path):
+    artifact = _fixture_artifact()
+    artifact["experiment"]["mode"] = "full_tx"
+    artifact["event_decisions"] = [
+        {
+            "timestamp": timestamp,
+            "source_timestamp": timestamp,
+            "house_id": 1,
+            "household_id": 0,
+            "plug_id": 1,
+            "plug_uid": 100001,
+            "actual_load": actual,
+            "predicted_load": predicted,
+            "reconstructed_load": actual,
+            "transmitted": True,
+            "decision": "transmit",
+            "reason": "normal",
+            "plug_status": "active",
+            "is_forced_transmit": False,
+            "threshold": "",
+            "residual": actual - predicted,
+            "abs_residual": abs(actual - predicted),
+        }
+        for timestamp, actual, predicted in [
+            (1000, 10.0, 8.0),
+            (2000, 20.0, 25.0),
+            (3000, 30.0, 27.0),
+        ]
+    ]
+
+    export_required_csvs_from_artifact(artifact, tmp_path)
+
+    summary = _read_csv(tmp_path / "house_summary.csv")[0]
+    plug = _read_csv(tmp_path / "plug_metrics.csv")[0]
+
+    assert float(summary["rmse_house_error"]) == pytest.approx(0.0)
+    assert float(summary["mae_house_error"]) == pytest.approx(0.0)
+    assert float(plug["rmse_reconstruction"]) == pytest.approx(0.0)
+    assert float(plug["mae_reconstruction"]) == pytest.approx(0.0)
+    assert float(plug["rmse_prediction"]) > 0.0
+    assert float(plug["mae_prediction"]) > 0.0

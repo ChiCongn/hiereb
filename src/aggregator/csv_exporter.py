@@ -15,6 +15,9 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
+ROLLING_WINDOW_SECONDS = 3600
+ROLLING_MIN_VALID_TIMESTAMPS = 60
+
 EXPERIMENT_RUNS_COLUMNS = [
     "run_id",
     "mode",
@@ -300,14 +303,19 @@ def _add_rolling_house_metrics(rows: list[dict[str, Any]]) -> None:
         for row in house_rows:
             current_ts = _float_or_zero(row["source_timestamp"])
             window.append(row)
-            while window and current_ts - _float_or_zero(window[0]["source_timestamp"]) > 3600:
+            window_start_exclusive = current_ts - ROLLING_WINDOW_SECONDS
+            while window and _float_or_zero(window[0]["source_timestamp"]) <= window_start_exclusive:
                 window.popleft()
             tr_values = [_float_or_zero(item.get("transmission_rate")) for item in window]
             errors = [_float_or_zero(item.get("house_error")) for item in window]
             row["rolling_tr_1h"] = _mean(tr_values)
             row["rolling_rmse_1h"] = _rmse(errors)
+            valid_timestamps = {
+                _float_or_zero(item["source_timestamp"])
+                for item in window
+            }
             row["rolling_insufficient_data"] = (
-                not window or current_ts - _float_or_zero(window[0]["source_timestamp"]) < 3600
+                len(valid_timestamps) < ROLLING_MIN_VALID_TIMESTAMPS
             )
 
 
