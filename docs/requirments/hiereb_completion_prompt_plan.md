@@ -297,6 +297,7 @@ Test cần thêm:
 Sau khi xong:
    - Chạy tests liên quan
    - Cập nhật progress log Phase 4-uniform
+   - Commit git theo chuẩn production: feat():..., fix():....
 
 Acceptance:
    - Không còn dùng settings.UNIFORM_DELTA trong baseline uniform decision
@@ -362,6 +363,7 @@ Test cần thêm/cập nhật:
 Sau khi xong:
    - Chạy allocator/ml tests
    - Cập nhật progress log Phase 4-hiereb
+   - Commit git theo chuẩn production: feat():..., fix():....
 
 Acceptance:
    - Không còn hard-coded floor 0.1 làm delta_p
@@ -417,6 +419,7 @@ Các cột đặc biệt bắt buộc:
 Sau khi xong:
    - Chạy tests schema/export
    - Cập nhật progress log Phase 5
+   - Commit git theo chuẩn production: feat():..., fix():....
 
 Acceptance:
    - Có script tạo đủ 6 CSV từ một run/demo nhỏ hoặc từ in-memory test fixture
@@ -455,6 +458,7 @@ Yêu cầu:
 Sau khi xong:
    - Chạy tests metrics
    - Cập nhật progress log Phase 5-metrics
+   - Commit git theo chuẩn production: feat():..., fix():....
 
 Acceptance:
    - Tests có fixture timestamp không đều để chứng minh dùng event-time
@@ -497,6 +501,8 @@ Yêu cầu:
 Sau khi xong:
    - Chạy tests/script dry-run nếu có
    - Cập nhật progress log Phase 6
+   - Commit git theo chuẩn production: feat():..., fix():....
+
 
 Acceptance:
    - Có thể sinh danh sách run plan deterministic mà không start Docker
@@ -549,6 +555,7 @@ Yêu cầu dashboard:
 Sau khi xong:
    - Chạy chart generator trên fixture/export demo nhỏ
    - Cập nhật progress log Phase 7
+   - Commit git theo chuẩn production: feat():..., fix():....
 
 Acceptance:
    - Có SVG Pareto và threshold trace
@@ -592,6 +599,7 @@ Acceptance:
    - Unit tests pass
    - Smoke run tạo đủ artifacts
    - Checklist phản ánh đúng trạng thái thật, không tick ảo
+   - Commit git theo chuẩn production: feat():..., fix():....
 ```
 
 Verification:

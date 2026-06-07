@@ -10,7 +10,7 @@ Architectural invariants (DO NOT VIOLATE):
   - Aggregator computes reconstruction error from actual-vs-reconstructed load.
     Suppressed events must still carry actual_load from the simulator evaluation
     path; otherwise house error cannot be measured correctly.
-  - The simulator decides stream timestamps. In wall_clock mode, DB rows
+  - The simulator decides stream timestamps. In live/rebased modes, DB rows can
     appear near current time while source_timestamp keeps the original DEBS time.
 """
 from __future__ import annotations
@@ -176,10 +176,11 @@ class HouseAggregator:
         self._messages_consumed = 0
 
     async def run(self) -> None:
+        consumer_group = f"{CONSUMER_GROUP}-{settings.RUN_ID}"
         consumer = AIOKafkaConsumer(
             TOPIC_SENSOR_DATA,
             bootstrap_servers=settings.KAFKA_BOOTSTRAP_SERVERS,
-            group_id=CONSUMER_GROUP,
+            group_id=consumer_group,
             auto_offset_reset="latest",
             enable_auto_commit=True,
             fetch_max_bytes=10 * 1024 * 1024,  # 10MB fetch
@@ -195,7 +196,7 @@ class HouseAggregator:
             )
             raise
 
-        log.info("aggregator_consumer_started", topic=TOPIC_SENSOR_DATA, group=CONSUMER_GROUP)
+        log.info("aggregator_consumer_started", topic=TOPIC_SENSOR_DATA, group=consumer_group)
 
         # ── Shutdown ───────────────────────────────────────────────────────
         shutdown_event = asyncio.Event()

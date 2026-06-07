@@ -31,8 +31,11 @@ class Settings(BaseSettings):
     ONE_HOUSE_ID: int = Field(default=1)
     FIVE_HOUSE_IDS: list[int] = Field(default_factory=lambda: [0, 1, 2, 3, 4])
     # NOTE: pydantic-settings reads lists from env as JSON.
-    # Example: HOUSE_IDS='[1]' or HOUSE_IDS='[0,1,2]'
-    HOUSE_IDS: list[int] = Field(default=[1])
+    # Example: HOUSE_IDS='[1]' or HOUSE_IDS='[0,1,2]'. Leave it [] when
+    # AUTO_DETECT_HOUSE_IDS=1 so DATA_FILE/DATA_GLOB chooses one or many houses.
+    HOUSE_IDS: list[int] = Field(default_factory=list)
+    AUTO_DETECT_HOUSE_IDS: bool = Field(default=True)
+    AUTO_DETECT_TIME_WINDOW: bool = Field(default=False)
     PROPERTY_FILTER: int = Field(default=1)  # DEBS property 1 = load (Watts)
     WARMUP_START: int = Field(default=1_377_993_600)  # 2013-09-01 00:00:00 UTC
     WARMUP_END: int = Field(default=1_378_598_399)    # 2013-09-07 23:59:59 UTC
@@ -43,8 +46,9 @@ class Settings(BaseSettings):
     # ── Simulator ─────────────────────────────────────────────────────────────
     REPLAY_SPEED: int = Field(default=60)          # 60x real-time
     SUPPRESSION_MODE: str = Field(default="full_tx")
-    # wall_clock: write simulated stream timestamps near current time.
-    # source: keep original DEBS unix timestamps.
+    # source: keep original CSV/DEBS unix timestamps.
+    # wall_clock/live: write timestamps near current wall clock, compressed by REPLAY_SPEED.
+    # stream_epoch/rebased: rebase source timestamps onto current time while preserving source gaps.
     STREAM_TIME_MODE: str = Field(default="wall_clock")
     # full_tx  : always transmit (no-suppression baseline)
     # uniform  : active-budget baseline, delta_p = Delta_H / active_plug_count

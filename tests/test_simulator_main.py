@@ -410,6 +410,26 @@ def test_resolve_stream_timestamp_wall_clock_scales_replay_time():
     ) == pytest.approx(1_700_000_001.0)
 
 
+def test_resolve_stream_timestamp_live_alias_scales_replay_time():
+    assert resolve_stream_timestamp(
+        1060,
+        source_start_timestamp=1000,
+        wall_start_timestamp=1_700_000_000.0,
+        replay_speed=60,
+        stream_time_mode="live",
+    ) == pytest.approx(1_700_000_001.0)
+
+
+def test_resolve_stream_timestamp_stream_epoch_rebases_source_time():
+    assert resolve_stream_timestamp(
+        1060,
+        source_start_timestamp=1000,
+        wall_start_timestamp=1_700_000_000.9,
+        replay_speed=60,
+        stream_time_mode="stream_epoch",
+    ) == pytest.approx(1_700_000_060.0)
+
+
 def test_resolve_stream_timestamp_source_mode_passthrough():
     assert resolve_stream_timestamp(
         1060,

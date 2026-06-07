@@ -64,6 +64,7 @@ from src.simulator.loader import (
     load_debs,
     resolve_data_files,
     resolve_house_ids,
+    resolve_time_windows,
 )
 
 log = structlog.get_logger(__name__)
@@ -561,6 +562,28 @@ async def _main() -> None:
         house_ids=settings.HOUSE_IDS,
         one_house_id=settings.ONE_HOUSE_ID,
         five_house_ids=settings.FIVE_HOUSE_IDS,
+        auto_detect_house_ids=settings.AUTO_DETECT_HOUSE_IDS,
+    )
+    warmup_start, warmup_end, eval_start, eval_end = resolve_time_windows(
+        data_files,
+        house_ids=house_ids,
+        property_filter=settings.PROPERTY_FILTER,
+        warmup_start=settings.WARMUP_START,
+        warmup_end=settings.WARMUP_END,
+        eval_start=settings.EVAL_START,
+        eval_end=settings.EVAL_END,
+        auto_detect_time_window=settings.AUTO_DETECT_TIME_WINDOW,
+    )
+    log.info(
+        "training_data_resolved",
+        files=[str(path) for path in data_files],
+        configured_house_ids=house_ids if house_ids is not None else "auto",
+        warmup_start=warmup_start,
+        warmup_end=warmup_end,
+        eval_start=eval_start,
+        eval_end=eval_end,
+        auto_detect_house_ids=settings.AUTO_DETECT_HOUSE_IDS,
+        auto_detect_time_window=settings.AUTO_DETECT_TIME_WINDOW,
     )
     predictor = TimeSlicePredictor(bin_seconds=settings.PREDICTOR_BIN_SECONDS)
     house_structure: dict[int, dict[int, list[int]]] = {}
@@ -568,7 +591,7 @@ async def _main() -> None:
     sample_count_by_house: dict[int, int] = {}
     warmup_residual_buffers_by_house: dict[int, dict[int, deque[float]]] = {}
     last_event_timestamp_by_plug: dict[int, int] = {}
-    initial_batch_start: int | None = settings.EVAL_START
+    initial_batch_start: int | None = eval_start
     total_rows = 0
     total_training_rows = 0
 
@@ -577,12 +600,12 @@ async def _main() -> None:
             data_file,
             house_ids=house_ids,
             property_filter=settings.PROPERTY_FILTER,
-            timestamp_start=settings.WARMUP_START,
-            timestamp_end=settings.EVAL_END,
+            timestamp_start=warmup_start,
+            timestamp_end=eval_end,
         )
         df_train = df_full[
-            (df_full["timestamp"] >= settings.WARMUP_START)
-            & (df_full["timestamp"] <= settings.WARMUP_END)
+            (df_full["timestamp"] >= warmup_start)
+            & (df_full["timestamp"] <= warmup_end)
         ]
         if df_train.empty:
             continue
@@ -619,10 +642,10 @@ async def _main() -> None:
         files=len(data_files),
         total_rows=total_rows,
         training_rows=total_training_rows,
-        warmup_start=settings.WARMUP_START,
-        warmup_end=settings.WARMUP_END,
-        eval_start=settings.EVAL_START,
-        eval_end=settings.EVAL_END,
+        warmup_start=warmup_start,
+        warmup_end=warmup_end,
+        eval_start=eval_start,
+        eval_end=eval_end,
     )
 
     log.info(
@@ -660,8 +683,8 @@ async def _main() -> None:
     )
     initial_deltas = allocator.reallocate(
         house_structure,
-        allocation_time=settings.EVAL_START,
-        effective_after_time=settings.EVAL_START - 1,
+        allocation_time=eval_start,
+        effective_after_time=eval_start - 1,
         threshold_version=0,
     )
 
@@ -677,8 +700,8 @@ async def _main() -> None:
         "initial_thresholds_published",
         house_count=len(house_structure),
         plug_count=len(initial_deltas),
-        allocation_time=settings.EVAL_START,
-        effective_after_time=settings.EVAL_START - 1,
+        allocation_time=eval_start,
+        effective_after_time=eval_start - 1,
     )
 
     # ── Shutdown coordination ──────────────────────────────────────────────
@@ -702,7 +725,7 @@ async def _main() -> None:
                 house_structure,
                 producer,
                 shutdown,
-                initial_allocation_time=settings.EVAL_START,
+                initial_allocation_time=eval_start,
                 last_event_timestamp_by_plug=last_event_timestamp_by_plug,
             ),
         )

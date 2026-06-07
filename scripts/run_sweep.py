@@ -182,6 +182,7 @@ def execute_sweep(
         env = os.environ.copy()
         env["RUN_ID_OVERRIDE"] = run.run_id
         env["HOUSE_IDS"] = json.dumps([run.house_id], separators=(",", ":"))
+        env["AUTO_DETECT_HOUSE_IDS"] = "0"
         env["ONE_HOUSE_ID"] = str(run.house_id)
         env["SUMMARY_FILE"] = str(summary_file)
         env["SWEEP_ID"] = run.sweep_id

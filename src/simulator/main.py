@@ -58,6 +58,7 @@ from src.simulator.loader import (
     iter_timestep_batches_from_files,
     resolve_data_files,
     resolve_house_ids,
+    resolve_time_windows,
 )
 from src.simulator.plug_state import HouseState
 from src.simulator.stats import SimStats
@@ -213,14 +214,24 @@ def resolve_stream_timestamp(
     replay_speed: int,
     stream_time_mode: str,
 ) -> float:
-    """Map source DEBS time to the timestamp published downstream."""
-    mode = stream_time_mode.strip().lower()
+    """Map source CSV/DEBS event-time to the timestamp published downstream.
+
+    The simulator keeps all suppression/prediction logic on source event-time.
+    This function only rewrites the externally visible stream timestamp, so
+    TimescaleDB/Grafana can look like a live stream while source_timestamp keeps
+    the original CSV timestamp for audit and deterministic replay.
+    """
+    mode = stream_time_mode.strip().lower().replace("-", "_")
     if mode == "source":
         return float(source_timestamp)
-    if mode == "wall_clock":
+    if mode in {"wall_clock", "live"}:
         speed = max(replay_speed, 1)
         return wall_start_timestamp + ((source_timestamp - source_start_timestamp) / speed)
-    raise ValueError("STREAM_TIME_MODE must be 'wall_clock' or 'source'")
+    if mode in {"stream_epoch", "rebased", "rebase"}:
+        return float(int(wall_start_timestamp) + (source_timestamp - source_start_timestamp))
+    raise ValueError(
+        "STREAM_TIME_MODE must be one of: source, wall_clock/live, stream_epoch/rebased"
+    )
 
 
 # ─── Main simulation coroutine ────────────────────────────────────────────────
@@ -254,13 +265,37 @@ async def run_simulator() -> None:
         house_ids=settings.HOUSE_IDS,
         one_house_id=settings.ONE_HOUSE_ID,
         five_house_ids=settings.FIVE_HOUSE_IDS,
+        auto_detect_house_ids=settings.AUTO_DETECT_HOUSE_IDS,
+    )
+    warmup_start, warmup_end, eval_start, eval_end = resolve_time_windows(
+        data_files,
+        house_ids=house_ids,
+        property_filter=settings.PROPERTY_FILTER,
+        warmup_start=settings.WARMUP_START,
+        warmup_end=settings.WARMUP_END,
+        eval_start=settings.EVAL_START,
+        eval_end=settings.EVAL_END,
+        auto_detect_time_window=settings.AUTO_DETECT_TIME_WINDOW,
+        read_chunk_size=settings.STREAM_READ_CHUNK_SIZE,
     )
     effective_house_ids = discover_stream_house_ids(
         data_files,
         house_ids=house_ids,
         property_filter=settings.PROPERTY_FILTER,
-        timestamp_start=settings.EVAL_START,
-        timestamp_end=settings.EVAL_END,
+        timestamp_start=eval_start,
+        timestamp_end=eval_end,
+    )
+    log.info(
+        "stream_data_resolved",
+        files=[str(path) for path in data_files],
+        configured_house_ids=house_ids if house_ids is not None else "auto",
+        effective_house_ids=effective_house_ids,
+        warmup_start=warmup_start,
+        warmup_end=warmup_end,
+        eval_start=eval_start,
+        eval_end=eval_end,
+        auto_detect_house_ids=settings.AUTO_DETECT_HOUSE_IDS,
+        auto_detect_time_window=settings.AUTO_DETECT_TIME_WINDOW,
     )
     batches = iter_timestep_batches_from_files(
         data_files,
@@ -268,8 +303,8 @@ async def run_simulator() -> None:
         property_filter=settings.PROPERTY_FILTER,
         max_duration_seconds=None,
         read_chunk_size=settings.STREAM_READ_CHUNK_SIZE,
-        timestamp_start=settings.EVAL_START,
-        timestamp_end=settings.EVAL_END,
+        timestamp_start=eval_start,
+        timestamp_end=eval_end,
     )
     try:
         first_batch = next(batches)

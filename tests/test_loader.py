@@ -11,6 +11,7 @@ import pandas as pd
 import pytest
 
 from config.settings import Settings
+import src.simulator.loader as loader_module
 from src.simulator.loader import (
     DebsLoadStats,
     PlugReading,
@@ -26,6 +27,7 @@ from src.simulator.loader import (
     partition_window_dir_name,
     resolve_data_files,
     resolve_house_ids,
+    resolve_time_windows,
 )
 
 
@@ -250,6 +252,16 @@ def test_resolve_house_ids_presets():
     ) is None
 
 
+def test_resolve_house_ids_custom_auto_ignores_stale_manual_list():
+    assert resolve_house_ids(
+        "custom",
+        house_ids=[99],
+        one_house_id=3,
+        five_house_ids=[0, 1, 2, 3, 4],
+        auto_detect_house_ids=True,
+    ) is None
+
+
 def test_resolve_data_files_custom(sample_csv):
     files = resolve_data_files(
         str(sample_csv.parent),
@@ -261,6 +273,61 @@ def test_resolve_data_files_custom(sample_csv):
         five_house_ids=[0, 1, 2, 3, 4],
     )
     assert files == [sample_csv]
+
+
+def test_resolve_data_files_custom_accepts_directory(tmp_path: Path):
+    partition_dir = tmp_path / "multi"
+    partition_dir.mkdir()
+    expected = []
+    for house_id in [2, 1]:
+        path = partition_dir / f"house-{house_id}.csv"
+        path.write_text(f"1,1000,1.0,1,0,0,{house_id}\n")
+        expected.append(path)
+
+    files = resolve_data_files(
+        str(tmp_path),
+        dataset_preset="custom",
+        data_window="all",
+        data_file="multi",
+        data_glob="",
+        one_house_id=1,
+        five_house_ids=[0, 1, 2, 3, 4],
+    )
+
+    assert files == sorted(expected)
+
+
+def test_resolve_time_windows_auto_rebases_to_file_start(tmp_path: Path):
+    source = tmp_path / "window.csv"
+    source.write_text(
+        "1,1000,1.0,1,0,0,1\n"
+        "2,1001,1.0,1,0,0,1\n"
+        "3,1002,1.0,1,0,0,1\n"
+        "4,1003,1.0,1,0,0,1\n"
+    )
+
+    assert resolve_time_windows(
+        [source],
+        house_ids=None,
+        property_filter=1,
+        warmup_start=100,
+        warmup_end=101,
+        eval_start=102,
+        eval_end=103,
+        auto_detect_time_window=True,
+        read_chunk_size=1,
+    ) == (1000, 1001, 1002, 1003)
+
+
+def test_discover_stream_house_ids_scans_combined_file_across_chunks(tmp_path: Path, monkeypatch):
+    combined = tmp_path / "combined.csv"
+    combined.write_text(
+        "1,1000,1.0,1,0,0,1\n"
+        "2,1001,1.0,1,0,0,2\n"
+    )
+    monkeypatch.setattr(loader_module, "_STREAM_READ_CHUNK_SIZE", 1)
+
+    assert discover_stream_house_ids([combined], house_ids=None, property_filter=1) == [1, 2]
 
 
 def test_resolve_five_houses_prefers_per_house_partitions(tmp_path):

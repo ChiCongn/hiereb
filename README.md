@@ -89,11 +89,26 @@ This writes `results/sweeps/<sweep_id>/sweep_plan.csv` with `sweep_id`,
 
 ## Data
 
-CSV files are expected under `data/`, for example `data/house-1.csv`. Confirm the actual `house_id` before changing `HOUSE_IDS`:
+CSV files are expected under `data/`, for example `data/house-1.csv`. For
+`DATASET_PRESET=custom`, point `DATA_FILE` at one CSV or set `DATA_GLOB`; with
+`AUTO_DETECT_HOUSE_IDS=1` the runtime detects whether the source is one-house
+or multi-house:
 
-```bash
-head -2 data/house-1.csv | cut -d',' -f7
+```env
+DATASET_PRESET=custom
+DATA_FILE=all-house/one-day.csv
+DATA_GLOB=
+AUTO_DETECT_HOUSE_IDS=1
+HOUSE_IDS=[]
 ```
+
+`DATA_FILE` may also be a directory; in that case custom mode loads
+`house-*.csv` inside it, for example `DATA_FILE=partitioned/one-day`.
+
+If a new file starts at a different timestamp range, set
+`AUTO_DETECT_TIME_WINDOW=1` to rebase the configured warmup/eval durations onto
+the selected CSV. Set `AUTO_DETECT_HOUSE_IDS=0` only when you intentionally want
+to filter to the manual `HOUSE_IDS` list.
 
 For multi-house runs, split a combined time window into one file per house:
 
@@ -130,6 +145,28 @@ DATASET_PRESET=all_house DATA_WINDOW=one_day bash scripts/verify_e2e.sh hiereb
 
 Use `STREAM_READ_CHUNK_SIZE` to tune replay memory per selected file; the
 default is `10000` rows.
+
+### CSV Streaming Timestamps
+
+The simulator never rewrites the source CSV files. It only changes the
+published Kafka `timestamp`; every message still includes `source_timestamp`
+with the original CSV event-time.
+
+Use `STREAM_TIME_MODE` to choose the stream timestamp:
+
+- `wall_clock` or `live`: start near current wall-clock time and compress source
+  gaps by `REPLAY_SPEED`. This is the best mode for a live Grafana demo.
+- `stream_epoch`: rebase the first CSV timestamp to current time and preserve
+  source timestamp gaps in the published stream.
+- `source`: keep original CSV/DEBS timestamps in the published stream.
+
+Example for replaying CSV data as a current-time stream:
+
+```bash
+STREAM_TIME_MODE=stream_epoch \
+DATASET_PRESET=custom DATA_FILE=all-house/one-day.csv AUTO_DETECT_HOUSE_IDS=1 \
+bash scripts/verify_e2e.sh hiereb
+```
 
 ## Demo Dashboard
 

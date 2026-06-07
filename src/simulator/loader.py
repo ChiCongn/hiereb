@@ -168,6 +168,7 @@ def resolve_house_ids(
     house_ids: list[int],
     one_house_id: int,
     five_house_ids: list[int],
+    auto_detect_house_ids: bool = False,
 ) -> list[int] | None:
     """
     Resolve configured house selection.
@@ -176,6 +177,8 @@ def resolve_house_ids(
     """
     preset = normalize_dataset_preset(dataset_preset)
     if preset == "custom":
+        if auto_detect_house_ids:
+            return None
         return house_ids or None
     if preset == "one_house":
         return [one_house_id]
@@ -235,6 +238,16 @@ def resolve_data_files(
             )
         return candidates
 
+    def _custom_candidates(paths: Iterable[Path]) -> list[Path]:
+        candidates: list[Path] = []
+        for path in paths:
+            if path.is_dir():
+                house_files = sorted(path.glob("house-*.csv"))
+                candidates.extend(house_files if house_files else sorted(path.glob("*.csv")))
+            else:
+                candidates.append(path)
+        return candidates
+
     def _partition_files_for_ids(ids: list[int]) -> list[Path] | None:
         candidates = [partition_dir / f"house-{house_id}.csv" for house_id in ids]
         if candidates and all(path.is_file() for path in candidates):
@@ -243,9 +256,11 @@ def resolve_data_files(
 
     if preset == "custom":
         if data_glob.strip():
-            return _existing(sorted(base.glob(data_glob.strip())))
+            return _existing(_custom_candidates(sorted(base.glob(data_glob.strip()))))
         raw_files = [part.strip() for part in data_file.split(",") if part.strip()]
-        return _existing(base / part for part in raw_files)
+        if not raw_files:
+            raise ValueError("DATA_FILE must not be empty when DATASET_PRESET=custom and DATA_GLOB is empty")
+        return _existing(_custom_candidates(base / part for part in raw_files))
 
     if preset == "one_house":
         if window != "all":
@@ -348,6 +363,17 @@ def _add_plug_uid(df: pd.DataFrame) -> pd.DataFrame:
         + df["plug_id"].astype("int64")
     )
     return df
+
+
+def _house_id_from_path(path: Path) -> int | None:
+    """Return the house id encoded in paths like house-0.csv or house-0/."""
+    for part in (path.stem, path.parent.name):
+        if not part.startswith("house-"):
+            continue
+        suffix = part.removeprefix("house-")
+        if suffix.isdigit():
+            return int(suffix)
+    return None
 
 
 def _deduplicate_and_sort(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
@@ -464,7 +490,8 @@ def load_debs_with_stats(
         raise ValueError(
             f"No data after filtering: property={property_filter}, house_ids={house_ids}. "
             f"Original file had {original_count} rows. "
-            f"Check HOUSE_IDS in .env"
+            "Check HOUSE_IDS, WARMUP/EVAL windows, or enable "
+            "AUTO_DETECT_HOUSE_IDS/AUTO_DETECT_TIME_WINDOW in .env"
         )
 
     n_plugs = df["plug_uid"].nunique()
@@ -769,14 +796,15 @@ def discover_stream_house_ids(
     Resolve house states before replay starts without materializing all rows.
 
     Preset-based multi-house runs use one partition file per house. If
-    HOUSE_IDS is already specified it is authoritative; otherwise one first
-    matching chunk from each partition is sufficient to identify houses.
+    HOUSE_IDS is already specified it is authoritative; otherwise the selected
+    CSV files are scanned by chunk to identify one-house or multi-house input.
     """
     if house_ids is not None:
         return sorted(set(house_ids))
 
     discovered: set[int] = set()
     for data_file in data_files:
+        encoded_house_id = _house_id_from_path(data_file)
         for chunk in _iter_raw_debs_chunks(data_file, chunk_size=_STREAM_READ_CHUNK_SIZE):
             mask = chunk["property"] == property_filter
             if timestamp_start is not None:
@@ -788,7 +816,111 @@ def discover_stream_house_ids(
             filtered = chunk[mask]
             if not filtered.empty:
                 discovered.update(int(value) for value in filtered["house_id"].unique())
-                break
+                if encoded_house_id is not None:
+                    break
     if not discovered:
         raise ValueError(f"No houses found in configured data files: {data_files}")
     return sorted(discovered)
+
+
+def discover_data_timestamp_bounds(
+    data_files: list[Path],
+    house_ids: list[int] | None,
+    property_filter: int = 1,
+    read_chunk_size: int = _STREAM_READ_CHUNK_SIZE,
+) -> tuple[int, int]:
+    """Return min/max valid source timestamp for the configured data files."""
+    if not data_files:
+        raise ValueError("No data files configured")
+
+    min_timestamp: int | None = None
+    max_timestamp: int | None = None
+    for data_file in data_files:
+        for chunk in _iter_raw_debs_chunks(data_file, chunk_size=read_chunk_size):
+            mask = chunk["property"] == property_filter
+            if house_ids is not None:
+                mask &= chunk["house_id"].isin(house_ids)
+            mask &= _finite_value_mask(chunk["value"])
+            mask &= chunk["value"] >= 0
+            filtered = chunk[mask]
+            if filtered.empty:
+                continue
+
+            chunk_min = int(filtered["timestamp"].min())
+            chunk_max = int(filtered["timestamp"].max())
+            min_timestamp = chunk_min if min_timestamp is None else min(min_timestamp, chunk_min)
+            max_timestamp = chunk_max if max_timestamp is None else max(max_timestamp, chunk_max)
+
+    if min_timestamp is None or max_timestamp is None:
+        raise ValueError(
+            f"No valid rows found while detecting time bounds: property={property_filter}, "
+            f"house_ids={house_ids}, files={data_files}"
+        )
+    return min_timestamp, max_timestamp
+
+
+def resolve_time_windows(
+    data_files: list[Path],
+    *,
+    house_ids: list[int] | None,
+    property_filter: int,
+    warmup_start: int,
+    warmup_end: int,
+    eval_start: int,
+    eval_end: int,
+    auto_detect_time_window: bool,
+    read_chunk_size: int = _STREAM_READ_CHUNK_SIZE,
+) -> tuple[int, int, int, int]:
+    """
+    Return warmup/eval bounds, optionally rebased to the selected CSV data.
+
+    Auto mode keeps the configured warmup/eval durations when they fit in the
+    file. If the file is shorter than the configured total duration, it splits
+    the available data into a warmup segment followed by an eval segment.
+    """
+    if warmup_start > warmup_end:
+        raise ValueError("WARMUP_START must be <= WARMUP_END")
+    if eval_start > eval_end:
+        raise ValueError("EVAL_START must be <= EVAL_END")
+    if not auto_detect_time_window:
+        return warmup_start, warmup_end, eval_start, eval_end
+
+    data_start, data_end = discover_data_timestamp_bounds(
+        data_files,
+        house_ids=house_ids,
+        property_filter=property_filter,
+        read_chunk_size=read_chunk_size,
+    )
+    available_seconds = data_end - data_start + 1
+    if available_seconds < 2:
+        raise ValueError(
+            "AUTO_DETECT_TIME_WINDOW needs at least two source timestamps "
+            f"for warmup and eval, found {available_seconds}"
+        )
+
+    warmup_seconds = warmup_end - warmup_start + 1
+    eval_seconds = eval_end - eval_start + 1
+    if warmup_seconds + eval_seconds > available_seconds:
+        warmup_seconds = max(1, min(warmup_seconds, available_seconds // 2))
+        eval_seconds = available_seconds - warmup_seconds
+    if eval_seconds <= 0:
+        raise ValueError(
+            "AUTO_DETECT_TIME_WINDOW could not reserve an eval window from "
+            f"available_seconds={available_seconds}"
+        )
+
+    resolved_warmup_start = data_start
+    resolved_warmup_end = resolved_warmup_start + warmup_seconds - 1
+    resolved_eval_start = resolved_warmup_end + 1
+    resolved_eval_end = min(data_end, resolved_eval_start + eval_seconds - 1)
+
+    log.info(
+        "time_window_auto_detected",
+        data_start=data_start,
+        data_end=data_end,
+        warmup_start=resolved_warmup_start,
+        warmup_end=resolved_warmup_end,
+        eval_start=resolved_eval_start,
+        eval_end=resolved_eval_end,
+    )
+    return resolved_warmup_start, resolved_warmup_end, resolved_eval_start, resolved_eval_end
