@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720">
+  <style>
+    .title { font: 700 30px Arial, sans-serif; fill: #111827; }
+    .axis { stroke: #374151; stroke-width: 2; }
+    .grid { stroke: #d1d5db; stroke-width: 1; }
+    .tick { font: 18px Arial, sans-serif; fill: #374151; }
+    .value { font: 16px Arial, sans-serif; fill: #111827; }
+    .ylabel { font: 18px Arial, sans-serif; fill: #111827; }
+  </style>
+  <rect width="100%" height="100%" fill="#ffffff" />
+  <text x="110" y="42" class="title">Average Transmission Rate by Run</text>
+  <line x1="110" y1="550" x2="1230" y2="550" class="axis" />
+  <line x1="110" y1="80" x2="110" y2="550" class="axis" />
+  <line x1="110" y1="80.00" x2="1230" y2="80.00" class="grid" /><text x="100" y="85.00" text-anchor="end" class="tick">1.08</text><line x1="110" y1="174.00" x2="1230" y2="174.00" class="grid" /><text x="100" y="179.00" text-anchor="end" class="tick">0.85</text><line x1="110" y1="268.00" x2="1230" y2="268.00" class="grid" /><text x="100" y="273.00" text-anchor="end" class="tick">0.62</text><line x1="110" y1="362.00" x2="1230" y2="362.00" class="grid" /><text x="100" y="367.00" text-anchor="end" class="tick">0.38</text><line x1="110" y1="456.00" x2="1230" y2="456.00" class="grid" /><text x="100" y="461.00" text-anchor="end" class="tick">0.15</text><line x1="110" y1="550.00" x2="1230" y2="550.00" class="grid" /><text x="100" y="555.00" text-anchor="end" class="tick">-0.08</text>
+  <rect x="188.40" y="112.41" width="216.53" height="437.59" fill="#1b9e77" rx="6" /><text x="296.67" y="102.41" text-anchor="middle" class="value">1.000</text><text x="296.67" y="625.00" text-anchor="middle" class="tick">e2e_full_tx_20260505164524</text><rect x="561.73" y="179.63" width="216.53" height="370.37" fill="#d95f02" rx="6" /><text x="670.00" y="169.63" text-anchor="middle" class="value">0.834</text><text x="670.00" y="625.00" text-anchor="middle" class="tick">hiereb</text><rect x="935.07" y="251.47" width="216.53" height="298.53" fill="#7570b3" rx="6" /><text x="1043.33" y="241.47" text-anchor="middle" class="value">0.657</text><text x="1043.33" y="625.00" text-anchor="middle" class="tick">uniform</text>
+  <text x="30" y="60" class="ylabel">avg tr</text>
+</svg>

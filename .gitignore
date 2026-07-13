@@ -30,6 +30,7 @@ node_modules/
 # Python
 __pycache__/
 *.py[cod]
+*.egg-info/
 .python-version
 .pytest_cache/
 .mypy_cache/
@@ -68,3 +69,4 @@ temp/
 
 # Local tool metadata
 .codex
+/docs/
