@@ -3,4 +3,3 @@
 from hiereb.domain.models import Event, PlugKey
 
 __all__ = ["Event", "PlugKey"]
-

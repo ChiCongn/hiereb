@@ -31,4 +31,3 @@ class ActiveSet:
                 if timestamp - self.window < last <= timestamp
             )
         )
-

@@ -87,8 +87,19 @@ def plug_metrics(result: ReplayResult) -> list[dict[str, Any]]:
 
 
 def top_outliers(result: ReplayResult, top_k: int) -> list[dict[str, Any]]:
-    rows = sorted(
+    batches = sorted(
         result.batch_rows,
         key=lambda row: (-float(row["abs_house_error"]), row["timestamp"]),
     )[:top_k]
-    return [dict(row) for row in rows]
+    rank = {row["timestamp"]: index for index, row in enumerate(batches)}
+    rows = [row for row in result.event_rows if row["timestamp"] in rank]
+    rows.sort(
+        key=lambda row: (
+            rank[row["timestamp"]],
+            -abs(float(row["reconstruction_error"])),
+            int(row["household_id"]),
+            int(row["plug_id"]),
+            int(row["original_row_index"]),
+        )
+    )
+    return [dict(row) for row in rows[:top_k]]

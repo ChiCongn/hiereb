@@ -16,9 +16,7 @@ def split_events(events: tuple[Event, ...], config: SplitsConfig) -> SplitEvents
     if config.validation.enabled:
         assert config.validation.start is not None and config.validation.end is not None
         validation = tuple(
-            e
-            for e in events
-            if config.validation.start <= e.timestamp <= config.validation.end
+            e for e in events if config.validation.start <= e.timestamp <= config.validation.end
         )
     if not warmup:
         raise ValueError("warm-up split is empty")
@@ -33,4 +31,3 @@ def mean_event_aligned_house_load(events: tuple[Event, ...]) -> float:
     for event in events:
         sums[event.timestamp] = sums.get(event.timestamp, 0.0) + event.value
     return sum(sums.values()) / len(sums)
-

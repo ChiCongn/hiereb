@@ -64,6 +64,7 @@ def fit_warmup_residuals(
     events: tuple[Event, ...],
     predictor: Predictor,
     floor_percentile: float,
+    rolling_window_size: int | None = None,
 ) -> tuple[float, dict[PlugKey, tuple[float, ...]], dict[PlugKey, tuple[float, ...]]]:
     """Fit floor and retain exact signed/absolute warm-up residuals for cap statistics."""
     residuals: defaultdict[PlugKey, list[float]] = defaultdict(list)
@@ -74,7 +75,14 @@ def fit_warmup_residuals(
     sigmas = [float(np.sqrt(np.mean(np.square(values)))) for values in residuals.values()]
     positive = [sigma for sigma in sigmas if sigma > 0]
     sigma_floor = float(np.percentile(positive, floor_percentile)) if positive else 1.0
-    squared = {plug: tuple(value * value for value in values) for plug, values in residuals.items()}
+    squared = {
+        plug: tuple(
+            value * value
+            for value in (
+                values[-rolling_window_size:] if rolling_window_size is not None else values
+            )
+        )
+        for plug, values in residuals.items()
+    }
     absolute = {plug: tuple(abs(value) for value in values) for plug, values in residuals.items()}
     return sigma_floor, squared, absolute
-

@@ -20,4 +20,3 @@ class ThresholdTimeline:
         if self.current is None or timestamp <= self.current.effective_after:
             return 0.0
         return self.current.thresholds.get(plug, 0.0)
-

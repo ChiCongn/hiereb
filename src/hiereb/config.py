@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from itertools import pairwise
 from pathlib import Path
@@ -50,6 +51,15 @@ class ColumnConfig(StrictModel):
     house_id: str = "house_id"
 
 
+class StreamingConfig(StrictModel):
+    """Bounded-memory input and replay settings."""
+
+    enabled: bool = False
+    chunk_rows: int = Field(default=100_000, ge=1)
+    staging_dir: Path = Path("data/.hiereb-staging")
+    reuse_staging: bool = True
+
+
 class DataConfig(StrictModel):
     path: Path
     format: Literal["csv", "parquet"]
@@ -58,6 +68,7 @@ class DataConfig(StrictModel):
     timestamp_unit: Literal["seconds", "milliseconds", "microseconds"] = "seconds"
     timezone: Literal["UTC"] = "UTC"
     columns: ColumnConfig
+    streaming: StreamingConfig = Field(default_factory=StreamingConfig)
 
 
 class IntervalConfig(StrictModel):
@@ -187,11 +198,15 @@ class AppConfig(StrictModel):
         return self
 
 
-def load_config(path: Path) -> AppConfig:
+def load_config(path: Path, data_path: Path | None = None) -> AppConfig:
     """Load a strict configuration from YAML."""
     if not path.is_file():
         raise FileNotFoundError(f"config does not exist: {path}")
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise ValueError("config root must be a mapping")
-    return AppConfig.model_validate(raw)
+    config = AppConfig.model_validate(raw)
+    override = data_path or (Path(value) if (value := os.getenv("HIEREB_DATA_PATH")) else None)
+    if override is None:
+        return config
+    return config.model_copy(update={"data": config.data.model_copy(update={"path": override})})

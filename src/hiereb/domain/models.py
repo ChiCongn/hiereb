@@ -19,7 +19,7 @@ class Event:
     household_id: int
     house_id: int
     original_row_index: int
-    event_id: str
+    event_id: str | int
 
     @property
     def plug_key(self) -> PlugKey:
@@ -34,4 +34,3 @@ class SplitEvents:
     warmup: tuple[Event, ...]
     validation: tuple[Event, ...]
     evaluation: tuple[Event, ...]
-

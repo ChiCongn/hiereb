@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Mapping
 from datetime import datetime
 
 import numpy as np
@@ -38,6 +39,18 @@ class TimeSliceMedianPredictor:
             by_plug[event.plug_key].append(event.value)
         self._slot_medians = {key: float(np.median(values)) for key, values in by_slot.items()}
         self._plug_medians = {key: float(np.median(values)) for key, values in by_plug.items()}
+        self._fitted = True
+
+    def fit_statistics(
+        self,
+        slot_medians: Mapping[tuple[PlugKey, Slot], float],
+        plug_medians: Mapping[PlugKey, float],
+    ) -> None:
+        """Fit from exact externally aggregated warm-up medians."""
+        if not plug_medians:
+            raise ValueError("predictor statistics must contain at least one plug")
+        self._slot_medians = dict(slot_medians)
+        self._plug_medians = dict(plug_medians)
         self._fitted = True
 
     def predict(self, plug: PlugKey, timestamp: datetime) -> float | None:

@@ -6,6 +6,7 @@ from hiereb.allocator.base import AllocationRequest, AllocationResult, result_fr
 
 
 def full_tx(request: AllocationRequest) -> AllocationResult:
+    """Assign the threshold to 0 for all plugs"""
     return result_from_thresholds(request, {plug: 0.0 for plug in request.active_plugs})
 
 
@@ -20,8 +21,7 @@ def flat_variance(request: AllocationRequest) -> AllocationResult:
     if total <= 0:
         return uniform(request)
     thresholds = {
-        plug: request.house_budget * request.scores[plug] / total
-        for plug in request.active_plugs
+        plug: request.house_budget * request.scores[plug] / total for plug in request.active_plugs
     }
     return result_from_thresholds(request, thresholds)
 
@@ -29,15 +29,19 @@ def flat_variance(request: AllocationRequest) -> AllocationResult:
 def legacy_two_stage(request: AllocationRequest) -> AllocationResult:
     """Algebraically flat allocation, deliberately preserving the legacy grouping view."""
     group_weights: dict[int, float] = {}
+
     for plug in request.active_plugs:
         group_weights[plug[0]] = group_weights.get(plug[0], 0.0) + request.scores[plug]
+
     house_weight = sum(group_weights.values())
+
     if house_weight <= 0:
         return uniform(request)
+
     # MATH_SPEC section 8 simplifies the two stages to this exact flat expression.
     thresholds = {
         plug: request.house_budget * request.scores[plug] / house_weight
         for plug in request.active_plugs
     }
-    return result_from_thresholds(request, thresholds)
 
+    return result_from_thresholds(request, thresholds)

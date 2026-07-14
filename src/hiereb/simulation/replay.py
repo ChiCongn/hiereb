@@ -15,6 +15,7 @@ from hiereb.predictor.base import Predictor
 from hiereb.residual.state import ResidualState
 from hiereb.simulation.active_set import ActiveSet
 from hiereb.simulation.threshold_timeline import ThresholdTimeline
+from hiereb.utils.progress import ProgressCallback, notify_progress
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +37,9 @@ def replay(
     sigma_floor: float,
     initial_squared_residuals: dict[PlugKey, tuple[float, ...]],
     warmup_absolute_residuals: dict[PlugKey, tuple[float, ...]],
+    precomputed_cap_quantiles: dict[PlugKey, float] | None = None,
+    cap_sample_counts: dict[PlugKey, int] | None = None,
+    progress: ProgressCallback | None = None,
 ) -> ReplayResult:
     """Replay one mode without wall-clock access or future raw-event inspection."""
     state = ResidualState(
@@ -50,6 +54,11 @@ def replay(
     batch_rows: list[dict[str, Any]] = []
     threshold_rows: list[dict[str, Any]] = []
     forced = {"full_tx": 0, "missing_prediction": 0, "inactive_reactivation": 0}
+    suppression_streaks: dict[PlugKey, int] = {}
+    cap_cache: dict[PlugKey, float] = {}
+    total_events = len(evaluation_events)
+    processed_events = 0
+    next_progress_percent = 10
 
     eval_start = config.splits.evaluation.start
     initial_time = eval_start - timedelta(microseconds=1)
@@ -64,12 +73,28 @@ def replay(
         house_budget,
         sigma_floor,
         warmup_absolute_residuals,
+        cap_cache,
+        precomputed_cap_quantiles,
+        cap_sample_counts,
     )
     next_allocation = eval_start + timedelta(seconds=config.replay.allocation_period_seconds)
 
     for timestamp, group in groupby(evaluation_events, key=lambda event: event.timestamp):
         batch = tuple(group)
-        pending: list[tuple[Event, float | None, float, float, bool, str | None]] = []
+        pending: list[
+            tuple[
+                Event,
+                float | None,
+                float,
+                float,
+                bool,
+                str | None,
+                float,
+                float | None,
+                datetime | None,
+                int,
+            ]
+        ] = []
         actual_house = 0.0
         reconstructed_house = 0.0
         transmitted_count = 0
@@ -78,6 +103,9 @@ def replay(
         for event in batch:
             prediction = predictor.predict(event.plug_key, timestamp)
             threshold = timeline.threshold(event.plug_key, timestamp)
+            residual_score = state.score(event.plug_key)
+            cap = timeline.current.caps.get(event.plug_key) if timeline.current else None
+            last_seen = active.last_seen.get(event.plug_key)
             reason: str | None = None
             if mode == "full_tx":
                 reason = "full_tx"
@@ -93,7 +121,22 @@ def replay(
             transmitted_count += int(transmitted)
             actual_house += event.value
             reconstructed_house += reconstructed
-            pending.append((event, prediction, residual, threshold, transmitted, reason))
+            consecutive = 0 if transmitted else suppression_streaks.get(event.plug_key, 0) + 1
+            suppression_streaks[event.plug_key] = consecutive
+            pending.append(
+                (
+                    event,
+                    prediction,
+                    residual,
+                    threshold,
+                    transmitted,
+                    reason,
+                    residual_score,
+                    cap,
+                    last_seen,
+                    consecutive,
+                )
+            )
 
         house_error = actual_house - reconstructed_house
         current = timeline.current
@@ -115,7 +158,18 @@ def replay(
                 "bound_violation": bound_violation,
             }
         )
-        for event, prediction, residual, threshold, transmitted, reason in pending:
+        for (
+            event,
+            prediction,
+            residual,
+            threshold,
+            transmitted,
+            reason,
+            residual_score,
+            cap,
+            last_seen,
+            consecutive,
+        ) in pending:
             reconstructed = event.value if transmitted or prediction is None else prediction
             event_rows.append(
                 {
@@ -134,12 +188,23 @@ def replay(
                     "reconstructed": reconstructed,
                     "reconstruction_error": event.value - reconstructed,
                     "forced_reason": reason,
+                    "forced_transmit_reason": reason,
+                    "decision": "transmit" if transmitted else "suppress",
+                    "residual_score": residual_score,
+                    "cap": cap,
+                    "consecutive_suppression": consecutive,
+                    "last_seen_timestamp": last_seen,
+                    "house_error": house_error,
+                    "abs_house_error": abs(house_error),
+                    "bound_utilization": (
+                        abs(house_error) / house_budget if house_budget > 0 else 0.0
+                    ),
                     "mode": mode,
                 }
             )
 
         # State changes occur only after all batch decisions are complete.
-        for event, prediction, residual, threshold, transmitted, _reason in pending:
+        for event, prediction, residual, threshold, transmitted, *_diagnostics in pending:
             if prediction is None:
                 continue
             if transmitted:
@@ -151,6 +216,17 @@ def replay(
                     exact_residual=residual if config.residual.estimator == "exact" else None,
                 )
         active.observe_batch(batch)
+        processed_events += len(batch)
+        while (
+            next_progress_percent <= 100
+            and processed_events * 100 >= total_events * next_progress_percent
+        ):
+            notify_progress(
+                progress,
+                f"mode {mode}: replay {next_progress_percent}% "
+                f"({processed_events:,}/{total_events:,} events)",
+            )
+            next_progress_percent += 10
 
         if timestamp >= next_allocation:
             _publish_allocation(
@@ -164,6 +240,9 @@ def replay(
                 house_budget,
                 sigma_floor,
                 warmup_absolute_residuals,
+                cap_cache,
+                precomputed_cap_quantiles,
+                cap_sample_counts,
             )
             while next_allocation <= timestamp:
                 next_allocation += timedelta(seconds=config.replay.allocation_period_seconds)
@@ -182,23 +261,31 @@ def _publish_allocation(
     house_budget: float,
     sigma_floor: float,
     warmup_absolute_residuals: dict[PlugKey, tuple[float, ...]],
+    cap_cache: dict[PlugKey, float],
+    precomputed_cap_quantiles: dict[PlugKey, float] | None,
+    cap_sample_counts: dict[PlugKey, int] | None,
 ) -> None:
     active_plugs = active.active_at(timestamp)
     scores = state.scores(active_plugs)
-    caps = (
-        build_caps(
-            active_plugs,
-            warmup_absolute_residuals,
-            house_budget,
-            sigma_floor,
-            config.cap.quantile,
-            config.cap.multiplier,
-            config.cap.max_house_budget_fraction,
-            config.cap.min_samples,
+    if mode == "true_hierarchical_cap":
+        missing_caps = tuple(plug for plug in active_plugs if plug not in cap_cache)
+        cap_cache.update(
+            build_caps(
+                missing_caps,
+                warmup_absolute_residuals,
+                house_budget,
+                sigma_floor,
+                config.cap.quantile,
+                config.cap.multiplier,
+                config.cap.max_house_budget_fraction,
+                config.cap.min_samples,
+                precomputed_cap_quantiles,
+                cap_sample_counts,
+            )
         )
-        if mode == "true_hierarchical_cap"
-        else {}
-    )
+        caps = {plug: cap_cache[plug] for plug in active_plugs}
+    else:
+        caps = {}
     result = allocate(
         mode,
         AllocationRequest(
@@ -228,6 +315,10 @@ def _publish_allocation(
                 "unused_budget": result.unused_budget,
                 "cap_hit_count": result.cap_hit_count,
                 "redistribution_rounds": result.redistribution_rounds,
+                "within_household_redistributed_budget": (
+                    result.within_household_redistributed_budget
+                ),
+                "cross_household_spill_budget": result.cross_household_spill_budget,
                 "mode": mode,
             }
         )
