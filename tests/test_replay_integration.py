@@ -108,6 +108,29 @@ def test_all_required_artifacts(synthetic_config: AppConfig, tmp_path: Path) -> 
     assert {"threshold", "effective_after", "unused_budget"} <= set(
         pl.read_parquet(run_dir / "threshold_trace.parquet").columns
     )
+    outlier_columns = set(pl.read_parquet(run_dir / "top_outliers.parquet").columns)
+    assert {
+        "house_error",
+        "plug_id",
+        "household_id",
+        "actual",
+        "prediction",
+        "residual",
+        "threshold_used",
+        "decision",
+        "residual_score",
+        "cap",
+        "consecutive_suppression",
+        "last_seen_timestamp",
+        "forced_transmit_reason",
+        "mode",
+    } <= outlier_columns
+    assert {
+        "within_household_redistributed_budget",
+        "cross_household_spill_budget",
+    } <= set(pl.read_parquet(run_dir / "threshold_trace.parquet").columns)
+    assert "cap_hit_rate" in summary
+    assert "unused_budget_ratio" in summary
     assert summary["bound_violation_count"] == 0
     assert any((run_dir / "plots").iterdir())
 

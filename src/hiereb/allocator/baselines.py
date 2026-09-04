@@ -21,7 +21,8 @@ def flat_variance(request: AllocationRequest) -> AllocationResult:
     if total <= 0:
         return uniform(request)
     thresholds = {
-        plug: request.house_budget * request.scores[plug] / total for plug in request.active_plugs
+        plug: request.house_budget * (request.scores[plug] / total)
+        for plug in request.active_plugs
     }
     return result_from_thresholds(request, thresholds)
 
@@ -40,7 +41,7 @@ def legacy_two_stage(request: AllocationRequest) -> AllocationResult:
 
     # MATH_SPEC section 8 simplifies the two stages to this exact flat expression.
     thresholds = {
-        plug: request.house_budget * request.scores[plug] / house_weight
+        plug: request.house_budget * (request.scores[plug] / house_weight)
         for plug in request.active_plugs
     }
 

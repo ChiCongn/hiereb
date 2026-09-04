@@ -15,4 +15,3 @@ def config_path() -> Path:
 @pytest.fixture
 def config(config_path: Path) -> AppConfig:
     return load_config(config_path)
-

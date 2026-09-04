@@ -18,6 +18,7 @@ from hiereb.config import AppConfig
 from hiereb.data.loader import event_from_row, filtered_event_frame
 from hiereb.domain.models import Event, PlugKey
 from hiereb.evaluation.artifacts import file_sha256
+from hiereb.predictor.adaptive import ewma_bias_transition
 from hiereb.predictor.slot_median import TimeSliceMedianPredictor
 from hiereb.utils.progress import ProgressCallback, notify_progress
 
@@ -32,11 +33,16 @@ class StreamingPreparedExperiment:
     filter_counts: dict[str, int]
     input_sha256: str
     predictor: TimeSliceMedianPredictor
+    mean_warmup_house_load: float
     house_budget: float
     sigma_floor: float
     squared_residuals: dict[PlugKey, tuple[float, ...]]
     cap_quantiles: dict[float, dict[PlugKey, float]]
     cap_sample_counts: dict[PlugKey, int]
+    warmup_initial_biases: dict[PlugKey, float]
+    drift_scales: dict[PlugKey, float]
+    household_drift_scales: dict[int, float]
+    house_drift_scale: float
     initial_last_seen: dict[PlugKey, datetime]
     warmup_event_count: int
     validation_event_count: int
@@ -71,6 +77,22 @@ def prepare_streaming(
         notify_progress(progress, f"streaming: staged accepted events at {stage_path}")
 
     staged = pl.scan_parquet(stage_path)
+    coverage = staged.select(
+        pl.col("timestamp").min().alias("minimum"),
+        pl.col("timestamp").max().alias("maximum"),
+    ).collect(engine="streaming")
+    minimum_timestamp = _as_datetime(coverage["minimum"].item())
+    maximum_timestamp = _as_datetime(coverage["maximum"].item())
+    if config.splits.validation.enabled and minimum_timestamp > config.splits.warmup.start:
+        raise ValueError(
+            "input coverage starts after warm-up start: "
+            f"{minimum_timestamp.isoformat()} > {config.splits.warmup.start.isoformat()}"
+        )
+    if config.splits.validation.enabled and maximum_timestamp < config.splits.evaluation.end:
+        raise ValueError(
+            "input coverage ends before evaluation end: "
+            f"{maximum_timestamp.isoformat()} < {config.splits.evaluation.end.isoformat()}"
+        )
     warmup = staged.filter(
         pl.col("timestamp").is_between(
             config.splits.warmup.start,
@@ -102,6 +124,8 @@ def prepare_streaming(
         )
     if warmup_count == 0:
         raise ValueError("warm-up split is empty")
+    if config.splits.validation.enabled and validation_count == 0:
+        raise ValueError("validation split is empty")
     if evaluation_count == 0:
         raise ValueError("evaluation split is empty")
     notify_progress(
@@ -111,9 +135,16 @@ def prepare_streaming(
     )
 
     predictor, residual_frame = _fit_predictor(warmup, config, progress)
-    sigma_floor, squared, cap_quantiles, cap_counts = _fit_residual_statistics(
-        residual_frame, config, progress
-    )
+    (
+        sigma_floor,
+        squared,
+        cap_quantiles,
+        cap_counts,
+        drift_scales,
+        household_drift_scales,
+        house_drift_scale,
+    ) = _fit_residual_statistics(residual_frame, config, progress)
+    initial_biases = initialize_adaptive_biases(stage_path, predictor, config)
     mean_load = float(
         warmup.group_by("timestamp", maintain_order=True)
         .agg(pl.col("value").sum().alias("house_load"))
@@ -140,11 +171,16 @@ def prepare_streaming(
         filter_counts=filter_counts,
         input_sha256=input_sha256,
         predictor=predictor,
+        mean_warmup_house_load=mean_load,
         house_budget=house_budget,
         sigma_floor=sigma_floor,
         squared_residuals=squared,
         cap_quantiles=cap_quantiles,
         cap_sample_counts=cap_counts,
+        warmup_initial_biases=initial_biases,
+        drift_scales=drift_scales,
+        household_drift_scales=household_drift_scales,
+        house_drift_scale=house_drift_scale,
         initial_last_seen=initial_last_seen,
         warmup_event_count=warmup_count,
         validation_event_count=validation_count,
@@ -231,6 +267,9 @@ def _fit_residual_statistics(
     dict[PlugKey, tuple[float, ...]],
     dict[float, dict[PlugKey, float]],
     dict[PlugKey, int],
+    dict[PlugKey, float],
+    dict[int, float],
+    float,
 ]:
     notify_progress(progress, "streaming: fitting residual floor, rolling state, and caps")
     sigmas = (
@@ -261,6 +300,38 @@ def _fit_residual_statistics(
         for index, quantile in enumerate(quantiles):
             cap_quantiles[quantile][plug] = float(row[f"q_{index}"])
 
+    residual_medians = (
+        residual_frame.group_by("household_id", "plug_id")
+        .agg(pl.col("_residual").median().alias("_residual_median"))
+        .collect(engine="streaming")
+    )
+    mad_rows = (
+        residual_frame.join(residual_medians.lazy(), on=["household_id", "plug_id"], how="left")
+        .with_columns((pl.col("_residual") - pl.col("_residual_median")).abs().alias("_deviation"))
+        .group_by("household_id", "plug_id")
+        .agg(pl.col("_deviation").median().alias("mad"))
+        .collect(engine="streaming")
+    )
+    drift_scales: dict[PlugKey, float] = {}
+    scales_by_household: defaultdict[int, list[float]] = defaultdict(list)
+    for row in mad_rows.iter_rows(named=True):
+        plug = (int(row["household_id"]), int(row["plug_id"]))
+        scale = max(
+            1.4826 * float(row["mad"]),
+            sigma_floor,
+            config.predictor.adaptive.drift.min_scale,
+        )
+        drift_scales[plug] = scale
+        scales_by_household[plug[0]].append(scale)
+    household_scales = {
+        household: float(np.median(scales)) for household, scales in scales_by_household.items()
+    }
+    house_scale = (
+        float(np.median(list(drift_scales.values())))
+        if drift_scales
+        else max(sigma_floor, config.predictor.adaptive.drift.min_scale, 1.0)
+    )
+
     rolling: defaultdict[PlugKey, deque[float]] = defaultdict(
         lambda: deque(maxlen=config.residual.rolling_window_size)
     )
@@ -277,7 +348,51 @@ def _fit_residual_statistics(
             residual = float(row["_residual"])
             rolling[plug].append(residual * residual)
     squared = {plug: tuple(values) for plug, values in rolling.items()}
-    return sigma_floor, squared, cap_quantiles, cap_counts
+    return (
+        sigma_floor,
+        squared,
+        cap_quantiles,
+        cap_counts,
+        drift_scales,
+        household_scales,
+        house_scale,
+    )
+
+
+def initialize_adaptive_biases(
+    stage_path: Path,
+    predictor: TimeSliceMedianPredictor,
+    config: AppConfig,
+) -> dict[PlugKey, float]:
+    """Replay warm-up exactly to initialize synchronized EWMA bias state."""
+    if not (
+        config.predictor.adaptive.enabled and config.predictor.adaptive.initialize_bias_from_warmup
+    ):
+        return {}
+    warmup = pl.scan_parquet(stage_path).filter(
+        pl.col("timestamp").is_between(
+            config.splits.warmup.start,
+            config.splits.warmup.end,
+            closed="both",
+        )
+    )
+    biases: dict[PlugKey, float] = {}
+    for frame in warmup.collect_batches(
+        chunk_size=config.data.streaming.chunk_rows,
+        maintain_order=True,
+        engine="streaming",
+    ):
+        for row in frame.iter_rows(named=True):
+            event = event_from_row(row)
+            baseline = predictor.predict(event.plug_key, event.timestamp)
+            if baseline is None:
+                continue
+            bias = biases.get(event.plug_key, 0.0)
+            innovation = event.value - (baseline + bias)
+            biases[event.plug_key] = ewma_bias_transition(
+                bias, innovation, config.predictor.adaptive.alpha
+            )
+    return biases
 
 
 def _add_slot_columns(frame: pl.LazyFrame, slot_seconds: int) -> pl.LazyFrame:

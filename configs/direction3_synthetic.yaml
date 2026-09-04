@@ -1,18 +1,12 @@
 experiment:
-  name: "direction1-house0"
+  name: "direction3-synthetic"
   seed: 42
-  output_dir: "outputs/direction1-house0"
+  output_dir: "outputs/direction3-synthetic"
   overwrite: true
-  modes:
-    - full_tx
-    - uniform
-    - flat_variance
-    - legacy_two_stage
-    - true_hierarchical
-    - true_hierarchical_cap
+  modes: [uniform, flat_variance, true_hierarchical, true_hierarchical_cap]
 
 data:
-  path: "data/synthetic_house_0.csv"
+  path: "data/synthetic_direction3.csv"
   format: "csv"
   house_id: 0
   load_property_value: 1
@@ -20,7 +14,7 @@ data:
   timezone: "UTC"
   streaming:
     enabled: true
-    chunk_rows: 100000
+    chunk_rows: 1000
     staging_dir: "data/.hiereb-staging"
     reuse_staging: true
   columns:
@@ -35,34 +29,51 @@ data:
 splits:
   warmup:
     start: "2013-09-01T00:00:00Z"
-    end: "2013-09-01T05:59:59Z"
+    end: "2013-09-07T23:59:59Z"
   validation:
     enabled: false
     start: null
     end: null
   evaluation:
-    start: "2013-09-01T06:00:00Z"
-    end: "2013-09-01T11:59:59Z"
+    start: "2013-09-08T00:00:00Z"
+    end: "2013-09-08T23:59:59Z"
 
 predictor:
   type: "time_slice_median"
   slot_seconds: 300
+  mode: "slot_median_ewma_drift_periodic_sync"
+  adaptive:
+    enabled: true
+    alpha: 0.10
+    initialize_bias_from_warmup: true
+    maximum_additional_tr: 0.10
+    maximum_unresolved_drift_fraction: 0.50
+    drift:
+      detector: "cusum"
+      min_scale: 1.0
+      zscore:
+        threshold: 3.0
+        consecutive_count: 3
+      cusum:
+        kappa: 0.5
+        threshold_h: 5.0
+      cooldown_events: 20
+    resynchronization:
+      max_consecutive_suppressions: 20
+      max_silence_seconds: 1800
 
 budget:
   epsilon_ratio: 0.01
-
 replay:
   allocation_period_seconds: 300
   active_window_seconds: 600
   float_tolerance: 1.0e-9
   top_k_outliers: 100
-
 residual:
   estimator: "exact"
   rolling_window_size: 1000
   min_samples: 30
   sigma_floor_percentile: 5.0
-
 true_hierarchy:
   household_fairness_alpha: 0.20
   plug_fairness_beta: 0.10
@@ -70,7 +81,6 @@ true_hierarchy:
     lambda_mean: 0.50
     lambda_max: 0.40
     lambda_count: 0.10
-
 cap:
   enabled: true
   quantile: 0.95
@@ -79,9 +89,15 @@ cap:
   min_samples: 30
   redistribution_tolerance: 1.0e-9
   max_iterations_extra: 10
-
 artifacts:
   write_threshold_trace: true
   write_plug_metrics: true
   write_household_metrics: true
   write_plots: true
+  predictor_trace:
+    enabled: true
+    sample_every_n_events: 100
+    always_include_updates: true
+    always_include_drift: true
+    always_include_resync: true
+    always_include_top_outliers: true

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Mode = Literal[
     "full_tx",
@@ -19,6 +19,29 @@ Mode = Literal[
     "true_hierarchical",
     "true_hierarchical_cap",
 ]
+PredictorMode = Literal[
+    "slot_median_frozen",
+    "slot_median_ewma",
+    "slot_median_ewma_periodic_sync",
+    "slot_median_ewma_drift",
+    "slot_median_ewma_drift_periodic_sync",
+    "slot_median_ewma_local_oracle",
+]
+DeployablePredictorMode = Literal[
+    "slot_median_frozen",
+    "slot_median_ewma",
+    "slot_median_ewma_periodic_sync",
+    "slot_median_ewma_drift",
+    "slot_median_ewma_drift_periodic_sync",
+]
+DEFAULT_PREDICTOR_MODES: tuple[DeployablePredictorMode, ...] = (
+    "slot_median_frozen",
+    "slot_median_ewma",
+    "slot_median_ewma_periodic_sync",
+    "slot_median_ewma_drift",
+    "slot_median_ewma_drift_periodic_sync",
+)
+DriftDetectorMode = Literal["none", "zscore_consecutive", "cusum"]
 
 
 class StrictModel(BaseModel):
@@ -120,9 +143,65 @@ class SplitsConfig(StrictModel):
         return self
 
 
+class ZScoreDriftConfig(StrictModel):
+    threshold: float = Field(default=3.0, gt=0.0)
+    consecutive_count: int = Field(default=3, gt=0)
+
+
+class CusumDriftConfig(StrictModel):
+    kappa: float = Field(default=0.5, ge=0.0)
+    threshold_h: float = Field(default=5.0, gt=0.0)
+
+
+class DriftConfig(StrictModel):
+    detector: DriftDetectorMode = "none"
+    min_scale: float = Field(default=1.0, gt=0.0)
+    zscore: ZScoreDriftConfig = Field(default_factory=ZScoreDriftConfig)
+    cusum: CusumDriftConfig = Field(default_factory=CusumDriftConfig)
+    cooldown_events: int = Field(default=0, ge=0)
+
+
+class ResynchronizationConfig(StrictModel):
+    max_consecutive_suppressions: int | None = None
+    max_silence_seconds: int | None = None
+
+    @field_validator("max_consecutive_suppressions", "max_silence_seconds", mode="before")
+    @classmethod
+    def normalize_disabled_trigger(cls, value: object) -> object:
+        """Treat both YAML null and the documented zero sentinel as disabled."""
+        return None if value == 0 else value
+
+    @model_validator(mode="after")
+    def positive_or_disabled(self) -> ResynchronizationConfig:
+        for name in ("max_consecutive_suppressions", "max_silence_seconds"):
+            value = getattr(self, name)
+            if value is not None and value < 0:
+                raise ValueError(f"predictor adaptive {name} must be null, 0, or > 0")
+        return self
+
+
+class AdaptivePredictorConfig(StrictModel):
+    enabled: bool = False
+    alpha: float = Field(default=0.1, ge=0.0, le=1.0)
+    initialize_bias_from_warmup: bool = False
+    drift: DriftConfig = Field(default_factory=DriftConfig)
+    resynchronization: ResynchronizationConfig = Field(default_factory=ResynchronizationConfig)
+    maximum_additional_tr: float = Field(default=0.03, ge=0.0, le=1.0)
+    maximum_unresolved_drift_fraction: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
 class PredictorConfig(StrictModel):
     type: Literal["time_slice_median"]
     slot_seconds: int = Field(gt=0, le=86400)
+    mode: PredictorMode = "slot_median_frozen"
+    modes: tuple[DeployablePredictorMode, ...] = DEFAULT_PREDICTOR_MODES
+    adaptive: AdaptivePredictorConfig = Field(default_factory=AdaptivePredictorConfig)
+
+    @model_validator(mode="after")
+    def unique_modes(self) -> PredictorConfig:
+        if not self.modes or len(set(self.modes)) != len(self.modes):
+            raise ValueError("predictor.modes must be non-empty and unique")
+        return self
 
 
 class BudgetConfig(StrictModel):
@@ -172,11 +251,21 @@ class CapConfig(StrictModel):
     max_iterations_extra: int = Field(ge=0)
 
 
+class PredictorTraceConfig(StrictModel):
+    enabled: bool = True
+    sample_every_n_events: int = Field(default=100, gt=0)
+    always_include_updates: bool = True
+    always_include_drift: bool = True
+    always_include_resync: bool = True
+    always_include_top_outliers: bool = True
+
+
 class ArtifactsConfig(StrictModel):
     write_threshold_trace: bool = True
     write_plug_metrics: bool = True
     write_household_metrics: bool = True
     write_plots: bool = True
+    predictor_trace: PredictorTraceConfig = Field(default_factory=PredictorTraceConfig)
 
 
 class AppConfig(StrictModel):
