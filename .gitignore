@@ -15,6 +15,9 @@ Desktop.ini
 .env.*
 !.env.example
 !.env.sample
+configs/*.yaml
+!configs/house_0.example.yaml
+!configs/direction3_*.yaml
 
 # Logs
 *.log
@@ -30,6 +33,7 @@ node_modules/
 # Python
 __pycache__/
 *.py[cod]
+*.egg-info/
 .python-version
 .pytest_cache/
 .mypy_cache/
@@ -37,6 +41,14 @@ __pycache__/
 .venv/
 venv/
 env/
+
+# Docker volumes (local dev)
+.docker/
+
+# Data
+/data/
+*.csv
+*.parquet
 
 # Coverage / test output
 .coverage
@@ -52,6 +64,7 @@ build/
 .svelte-kit/
 out/
 target/
+outputs/
 
 # Caches / temp files
 .cache/
@@ -61,3 +74,4 @@ temp/
 
 # Local tool metadata
 .codex
+/docs/
